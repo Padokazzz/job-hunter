@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Job Hunter</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💼</text></svg>" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="logo">💼</div>
+        <div>
+          <h1>Job Hunter</h1>
+          <div class="sub">Sistema de vagas</div>
+        </div>
+      </div>
+      <nav id="nav">
+        <a href="#dashboard" data-page="dashboard" class="nav-item active">
+          <span class="ico">📊</span> Dashboard <span class="badge" id="nav-dash">·</span>
+        </a>
+        <a href="#jobs" data-page="jobs" class="nav-item">
+          <span class="ico">💼</span> Vagas <span class="badge" id="nav-jobs">·</span>
+        </a>
+        <a href="#sources" data-page="sources" class="nav-item">
+          <span class="ico">🔌</span> Fontes
+        </a>
+        <a href="#reports" data-page="reports" class="nav-item">
+          <span class="ico">📈</span> Relatórios
+        </a>
+        <a href="#applications" data-page="applications" class="nav-item">
+          <span class="ico">📨</span> Candidaturas
+        </a>
+        <a href="#settings" data-page="settings" class="nav-item">
+          <span class="ico">⚙️</span> Config
+        </a>
+      </nav>
+      <div class="spacer"></div>
+      <div class="dbmode">
+        <span class="dot"></span>
+        <span id="dbmode-text">conectando…</span>
+      </div>
+    </aside>
+
+    <div class="main">
+      <header class="topbar">
+        <h2 class="page-title" id="page-title">Dashboard</h2>
+        <div class="grow"></div>
+        <div class="global-search">
+          <span class="si">🔍</span>
+          <input type="text" id="global-search" placeholder="Buscar vaga, empresa, stack…" />
+        </div>
+        <label class="switch" title="Atualizar automaticamente">
+          <input type="checkbox" id="auto-refresh" /> Auto
+        </label>
+        <button class="icon-btn" id="btn-refresh" title="Atualizar">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>
+        </button>
+      </header>
+
+      <div class="content">
+        <div id="msg" class="msg" style="display:none"></div>
+
+        <!-- DASHBOARD -->
+        <section class="page active" id="page-dashboard">
+          <div class="cards" id="dash-cards">
+            <div class="skeleton" style="height:90px"></div>
+            <div class="skeleton" style="height:90px"></div>
+            <div class="skeleton" style="height:90px"></div>
+            <div class="skeleton" style="height:90px"></div>
+          </div>
+          <div class="grid-2">
+            <div class="panel"><h3>Classificação</h3><div id="dash-class"></div></div>
+            <div class="panel"><h3>Status</h3><div id="dash-status"></div></div>
+            <div class="panel"><h3>Fontes</h3><div id="dash-source"></div></div>
+            <div class="panel"><h3>Empresas</h3><div id="dash-companies"></div></div>
+          </div>
+          <div class="panel">
+            <h3>Melhores Vagas</h3>
+            <div id="dash-recent"><div class="skeleton" style="height:200px"></div></div>
+          </div>
+        </section>
+
+        <!-- JOBS -->
+        <section class="page" id="page-jobs">
+          <div class="filters-wrap" id="filters-wrap">
+            <div class="filters-header" id="filters-toggle">
+              <span class="filters-title">🔍 Filtros</span>
+              <span class="filters-count" id="filters-count"></span>
+              <span class="filters-arrow" id="filters-arrow">▼</span>
+            </div>
+            <div class="filters-body" id="filters-body">
+              <div class="filters-grid">
+                <div><label>Score mínimo</label><input type="number" id="f-score" min="0" placeholder="0" /></div>
+                <div><label>Stack</label><input type="text" id="f-stack" placeholder="node, react" /></div>
+                <div><label>Senioridade</label>
+                  <select id="f-seniority"><option value=""></option><option>JUNIOR</option><option>JUNIOR_PLENO</option><option>PLENO</option><option>SENIOR</option></select>
+                </div>
+                <div><label>Modelo</label>
+                  <select id="f-workModel"><option value=""></option><option>REMOTE</option><option>HYBRID</option><option>ONSITE</option></select>
+                </div>
+                <div><label>Localização</label><input type="text" id="f-location" placeholder="São Paulo" /></div>
+                <div><label>Fonte</label><select id="f-source"><option value=""></option></select></div>
+                <div><label>Idioma</label>
+                  <select id="f-english"><option value=""></option><option>NONE</option><option>TECHNICAL</option><option>INTERMEDIATE</option><option>ADVANCED</option></select>
+                </div>
+                <div><label>Status</label>
+                  <select id="f-status">
+                    <option value=""></option><option>NEW</option><option>REVIEWING</option><option>APPROVED</option>
+                    <option>APPLICATION_READY</option><option>APPLIED</option><option>INTERVIEW</option>
+                    <option>REJECTED</option><option>CLOSED</option>
+                  </select>
+                </div>
+                <div><label>Busca</label><input type="text" id="f-search" placeholder="termo..." /></div>
+                <div><label>Empresa</label><select id="f-company"><option value=""></option></select></div>
+                <div class="chk"><label style="margin:0"><input type="checkbox" id="f-fav" /> Favoritadas</label></div>
+              </div>
+              <div class="filters-actions">
+                <button class="primary" id="btn-search">Buscar</button>
+                <button id="btn-clear">Limpar</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="toolbar">
+            <span class="result-line" id="jobs-count">—</span>
+            <div class="grow"></div>
+            <div class="chip-row" id="quick-chips">
+              <span class="chip" data-q="fav">⭐ Favoritas</span>
+              <span class="chip" data-q="new">🆕 Não vistas</span>
+              <span class="chip" data-q="applied">✅ Candidatadas</span>
+              <span class="chip" data-q="remote">🌐 Remotas</span>
+            </div>
+          </div>
+
+          <div class="table-wrap">
+            <table id="jobs-table">
+              <thead>
+                <tr>
+                  <th data-sort="title">Título</th>
+                  <th data-sort="company">Empresa</th>
+                  <th data-sort="score">Score</th>
+                  <th data-sort="classification">Class</th>
+                  <th data-sort="status">Status</th>
+                  <th data-sort="workModel">Modelo</th>
+                  <th data-sort="seniority">Senioridade</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody id="jobs-body"></tbody>
+            </table>
+            <div class="loadmore" id="loadmore-wrap" style="display:none">
+              <button id="btn-loadmore">Carregar mais</button>
+            </div>
+            <div class="empty" id="jobs-empty" style="display:none">Nenhuma vaga encontrada.</div>
+          </div>
+        </section>
+
+        <!-- SOURCES -->
+        <section class="page" id="page-sources">
+          <h2 class="section-title">Fontes de coleta</h2>
+          <div class="table-wrap">
+            <table id="sources-table">
+              <thead><tr><th>Nome</th><th>Ativa</th><th>Status</th><th>Última coleta</th><th>Nota</th><th>Erro</th></tr></thead>
+              <tbody id="sources-body"></tbody>
+            </table>
+            <div class="empty" id="sources-empty" style="display:none">Nenhuma fonte.</div>
+          </div>
+        </section>
+
+        <!-- REPORTS -->
+        <section class="page" id="page-reports">
+          <h2 class="section-title">Relatórios</h2>
+          <div class="grid-2">
+            <div class="panel">
+              <table id="reports-table">
+                <thead><tr><th>Data</th><th>Encontradas</th><th>Relevantes</th></tr></thead>
+                <tbody id="reports-body"></tbody>
+              </table>
+              <div class="empty" id="reports-empty" style="display:none">Nenhum relatório.</div>
+            </div>
+            <div class="panel" id="report-detail">
+              <h3>Detalhe</h3>
+              <div class="muted" id="report-detail-empty">Selecione um relatório.</div>
+              <div id="report-detail-content" style="display:none"></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- APPLICATIONS -->
+        <section class="page" id="page-applications">
+          <h2 class="section-title">Candidaturas</h2>
+          <div class="table-wrap">
+            <table id="apps-table">
+              <thead><tr><th>Vaga</th><th>Empresa</th><th>Status</th><th>Enviada em</th><th>Link</th></tr></thead>
+              <tbody id="apps-body"></tbody>
+            </table>
+            <div class="empty" id="apps-empty" style="display:none">Nenhuma candidatura.</div>
+          </div>
+        </section>
+
+        <!-- SETTINGS -->
+        <section class="page" id="page-settings">
+          <h2 class="section-title">Configuração</h2>
+          <div class="panel" id="settings-content"><div class="muted">Carregando…</div></div>
+        </section>
+      </div>
+    </div>
+  </div>
+
+  <!-- DRAWER -->
+  <div class="drawer-overlay" id="drawer">
+    <aside class="drawer">
+      <div class="drawer-header">
+        <button class="x-close" id="drawer-close">✕</button>
+        <h2 id="m-title"></h2>
+        <div class="sub muted" id="m-sub"></div>
+        <div class="pill-row" id="m-pills"></div>
+      </div>
+      <div class="drawer-body">
+        <div class="drawer-actions">
+          <button id="m-fav">⭐ Favoritar</button>
+          <button id="m-view">👁 Marcar vista</button>
+          <button id="m-approve">✅ Aprovar</button>
+          <button id="m-ignore">❌ Ignorar</button>
+          <button class="primary" id="m-prepare">📋 Preparar</button>
+        </div>
+        <section>
+          <h4>Descrição</h4>
+          <div class="desc-box" id="m-desc"></div>
+        </section>
+        <section>
+          <h4>Motivos</h4>
+          <ul class="reasons" id="m-reasons"></ul>
+        </section>
+        <section>
+          <h4>Pontos de atenção</h4>
+          <ul class="reasons" id="m-concerns"></ul>
+        </section>
+        <section>
+          <h4>Pontuação</h4>
+          <div id="m-breakdown"></div>
+        </section>
+        <section>
+          <h4>Notas</h4>
+          <textarea id="m-notes" placeholder="Anotações…"></textarea>
+          <div class="notes"><button class="primary" id="m-save-notes">Salvar</button> <span id="m-notes-msg" class="muted"></span></div>
+        </section>
+        <section id="m-application" style="display:none">
+          <h4>Candidatura</h4>
+          <div id="m-app-content"></div>
+          <div class="drawer-actions" style="margin-top:8px">
+            <button class="primary" id="m-applied">✅ Candidatado</button>
+          </div>
+        </section>
+      </div>
+    </aside>
+  </div>
+
+  <div class="toasts" id="toasts"></div>
+
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

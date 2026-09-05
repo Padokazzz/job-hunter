@@ -1,0 +1,95 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: job-hunter-postgres
+    environment:
+      POSTGRES_DB: jobhunter
+      POSTGRES_USER: jobhunter
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Defina POSTGRES_PASSWORD no .env}
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U jobhunter -d jobhunter"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  init-db:
+    build: .
+    container_name: job-hunter-init-db
+    command: ["npx", "prisma", "db", "push", "--accept-data-loss"]
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=postgresql://jobhunter:${POSTGRES_PASSWORD}@postgres:5432/jobhunter
+      - JOBHUNTER_DB_CONFIRMED=1
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  dashboard:
+    build: .
+    container_name: job-hunter-dashboard
+    ports:
+      - "${DASHBOARD_PORT:-3000}:3000"
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=postgresql://jobhunter:${POSTGRES_PASSWORD}@postgres:5432/jobhunter
+      - JOBHUNTER_DB_CONFIRMED=1
+      - DASHBOARD_PORT=3000
+    volumes:
+      - bot-uploads:/app/uploads
+    depends_on:
+      init-db:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/stats"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  bot:
+    build: .
+    container_name: job-hunter-bot
+    command: ["npx", "tsx", "src/main.ts"]
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=postgresql://jobhunter:${POSTGRES_PASSWORD}@postgres:5432/jobhunter
+      - JOBHUNTER_DB_CONFIRMED=1
+    volumes:
+      - bot-uploads:/app/uploads
+    depends_on:
+      init-db:
+        condition: service_completed_successfully
+    restart: "no"
+    profiles:
+      - run-bot
+
+  scheduler:
+    build: .
+    container_name: job-hunter-scheduler
+    command: >
+      sh -c "while true; do npx tsx src/main.ts; echo 'Aguardando 6 horas...'; sleep 21600; done"
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=postgresql://jobhunter:${POSTGRES_PASSWORD}@postgres:5432/jobhunter
+      - JOBHUNTER_DB_CONFIRMED=1
+    volumes:
+      - bot-uploads:/app/uploads
+    depends_on:
+      init-db:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+volumes:
+  pg-data:
+    driver: local
+  bot-uploads:
+    driver: local

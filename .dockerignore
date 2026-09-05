@@ -1,0 +1,17 @@
+node_modules
+dist
+*.log
+*.db
+*.db-journal
+.env
+.env.local
+.DS_Store
+.git
+tests
+curriculo
+candidatura autmatica.md
+dash.err
+dash.log
+pipeline.log
+prisma/dev.db
+prisma/dev.db-journal
