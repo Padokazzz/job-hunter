@@ -8,7 +8,7 @@ O sistema reúne vagas de diferentes fontes, normaliza os dados, remove duplicid
 
 ## Funcionalidades
 
-- **Coleta mult fonte:** integração com sete fontes, usando APIs, parsers e adaptadores específicos.
+- **Coleta multifonte:** integração com sete fontes, usando APIs, parsers e adaptadores específicos.
 - **Normalização e deduplicação:** padronização dos dados e identificação de oportunidades repetidas.
 - **Scoring configurável:** pontuação de 0 a 100 considerando tecnologias, senioridade, modelo de trabalho, idioma, localização e aderência ao currículo.
 - **Dashboard:** busca, filtros, favoritos, status, relatórios e detalhes de cada oportunidade.
