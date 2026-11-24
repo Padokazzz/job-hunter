@@ -1,14 +1,17 @@
+> **Projeto em destaque do portfólio** · Automação responsável para organizar oportunidades de trabalho.
+>
+> **Stack:** TypeScript · Node.js · Fastify · Prisma · PostgreSQL · Docker
 # Job Hunter Bot
 
-Bot de busca e candidatura automatizada a vagas de tecnologia, com scoring inteligente baseado em curriculo e dashboard web para gerenciamento.
+Plataforma pessoal para coleta, organização e análise de vagas de tecnologia. Consolida oportunidades de diferentes fontes, calcula compatibilidade com o perfil configurado e oferece um dashboard para acompanhar vagas e preparar candidaturas.
 
-## Caracteristicas
+## Visão geral e funcionalidades
 
 - **7 fontes de vagas**: RemoteOK, Remotive, Jobicy, Programathor, GeekHunter, Gupy (MCP), Indeed (Bright Data)
 - **Scoring multi-categoria**: Pontuacao de 0-100 baseada em stack, modelo de trabalho, senioridade, idioma, localizacao e match com curriculo
 - **Dashboard web**: Interface completa para visualizar, filtrar, favoritar e gerenciar vagas
 - **Candidatura assistida**: Gera carta de apresentacao, mensagens e respostas personalizadas
-- **Nunca envia automaticamente**: Todo envio e feito pelo humano via dashboard
+- **Envio sob controle humano**: o sistema prepara materiais, mas não envia candidaturas automaticamente
 - **Docker ready**: Setup completo com PostgreSQL, scheduler automatico e dashboard
 
 ## Pre-requisitos
@@ -20,8 +23,8 @@ Bot de busca e candidatura automatizada a vagas de tecnologia, com scoring intel
 
 ```bash
 # 1. Clone o repositorio
-git clone https://github.com/seu-usuario/job-hunter-bot.git
-cd job-hunter-bot
+git clone https://github.com/Padokazzz/job-hunter.git
+cd job-hunter
 
 # 2. Copie o arquivo de exemplo
 cp .env.example .env
