@@ -1,6 +1,6 @@
 import type { NormalizedJob, ScoreResult, Classification, ScoreBreakdownItem } from "../jobs/types.js";
 import type { CandidateProfile } from "../config/candidate.js";
-import { calculateResumeBonus } from "./resume-match.js";
+import { technologiesOf, type ResumeRankingProfile } from "./resume-match.js";
 
 function classify(score: number): Classification {
   if (score >= 85) return "PRIORITARY";
@@ -10,33 +10,44 @@ function classify(score: number): Classification {
   return "DISCARD";
 }
 
-export async function scoreJob(job: NormalizedJob, candidate: CandidateProfile): Promise<ScoreResult> {
+export async function scoreJob(job: NormalizedJob, candidate: CandidateProfile, resume: ResumeRankingProfile | null = null): Promise<ScoreResult> {
   const reasons: string[] = [];
   const concerns: string[] = [];
   const breakdown: ScoreBreakdownItem[] = [];
   let score = 0;
 
-  // --- Stack (40) ---
+  const jobTechnologies = [...technologiesOf(job.technologies)];
+  const resumeTechnologies = technologiesOf(resume?.technologies ?? []);
+  const matchedTechs = jobTechnologies.filter((tech) => resumeTechnologies.has(tech));
+  const matchRatio = jobTechnologies.length ? matchedTechs.length / jobTechnologies.length : 0;
+
+  // --- Stack ---
   let stack = 0;
   const matchedStack: string[] = [];
-  for (const tech of job.technologies) {
-    const pts = candidate.stackPoints[tech];
+  for (const tech of jobTechnologies) {
+    const pts = resume ? 0 : candidate.stackPoints[tech];
     if (pts) {
       stack += pts;
       matchedStack.push(`${tech}(+${pts})`);
     }
   }
-  const stackPenalty = 0; // base; ajustado abaixo se techs de baixa prioridade
-  stack = Math.min(40, stack);
+  const stackMax = resume ? 70 : 40;
+  stack = resume ? Math.round(stackMax * matchRatio) : Math.min(stackMax, stack);
   score += stack;
-  if (matchedStack.length) reasons.push(`Stack aderente: ${matchedStack.join(", ")}`);
-  breakdown.push({ category: "stack", points: stack, maxPoints: 40, detail: matchedStack.join(", ") || "nenhuma tech aderente" });
+  if (resume) {
+    const detail = jobTechnologies.length
+      ? `${matchedTechs.length}/${jobTechnologies.length} tecnologias da vaga presentes no PDF`
+      : "Nenhuma tecnologia identificada na vaga";
+    reasons.push(detail + (matchedTechs.length ? `: ${matchedTechs.join(", ")}` : ""));
+    breakdown.push({ category: "resumeMatch", points: stack, maxPoints: stackMax, detail: reasons[0] });
+  } else {
+    if (matchedStack.length) reasons.push(`Stack aderente: ${matchedStack.join(", ")}`);
+    breakdown.push({ category: "stack", points: stack, maxPoints: stackMax, detail: matchedStack.join(", ") || "nenhuma tech aderente" });
+  }
 
-  const lowOnly = job.technologies.length > 0 && job.technologies.every((t) => candidate.lowPriorityTechs.includes(t));
-  if (lowOnly) {
-    score -= 8;
-    concerns.push("Tecnologias centrais fora do perfil (baixa prioridade)");
-  } else if (job.technologies.some((t) => candidate.lowPriorityTechs.includes(t))) {
+  const lowOnly = !resume && jobTechnologies.length > 0 && jobTechnologies.every((t) => candidate.lowPriorityTechs.includes(t));
+  if (lowOnly) concerns.push("Tecnologias centrais fora do perfil (baixa prioridade)");
+  else if (!resume && jobTechnologies.some((t) => candidate.lowPriorityTechs.includes(t))) {
     concerns.push("Menciona tecnologia de baixa prioridade");
   }
 
@@ -66,13 +77,8 @@ export async function scoreJob(job: NormalizedJob, candidate: CandidateProfile):
     seniorityNote = "Pleno (+7)";
   } else if (job.seniority === "SENIOR") {
     // Para vagas SENIOR: analisar se faz sentido baseado no currículo
-    const resumeData = await calculateResumeBonus(job.technologies);
-    const years = resumeData.experienceYears ?? 0;
-    const matchedTechs = resumeData.technologies.filter((t) =>
-      job.technologies.some((jt) => jt.toLowerCase().includes(t.toLowerCase()) || t.toLowerCase().includes(jt.toLowerCase()))
-    );
-    const jobTechCount = job.technologies.length;
-    const matchRatio = jobTechCount > 0 ? matchedTechs.length / jobTechCount : 0;
+    const years = resume?.experienceYears ?? 0;
+    const jobTechCount = jobTechnologies.length;
 
     // Vaga SENIOR faz sentido se:
     // 1. Candidato tem 2+ anos E domina pelo menos 50% das tecnologias
@@ -93,6 +99,15 @@ export async function scoreJob(job: NormalizedJob, candidate: CandidateProfile):
     seniorityNote = "Senioridade não informada (+5 padrão)";
   }
 
+  const resumeLevels: Record<string, string[]> = {
+    estagiario: ["JUNIOR"], junior: ["JUNIOR", "JUNIOR_PLENO"],
+    pleno: ["PLENO", "JUNIOR_PLENO"], senior: ["SENIOR"],
+  };
+  if (resume?.experienceLevel && job.seniority !== "UNKNOWN") {
+    const compatible = resumeLevels[resume.experienceLevel]?.includes(job.seniority);
+    senPts = compatible ? 15 : Math.min(senPts, 5);
+    seniorityNote = compatible ? "Senioridade compatível com o currículo" : "Senioridade diferente da identificada no currículo";
+  }
   score += senPts;
   if (seniorityNote) reasons.push(seniorityNote);
   breakdown.push({ category: "seniority", points: senPts, maxPoints: 15, detail: job.seniority });
@@ -100,6 +115,7 @@ export async function scoreJob(job: NormalizedJob, candidate: CandidateProfile):
   // "3+ anos para vaga junior"
   if ((job.seniority === "JUNIOR" || job.seniority === "JUNIOR_PLENO") && /\b(3|4|5|6|7|8|9|10)\+?\s*anos?\b/i.test(job.description)) {
     score -= 5;
+    breakdown.push({ category: "experiencePenalty", points: -5, maxPoints: 0, detail: "Exige 3+ anos para vaga júnior" });
     concerns.push("Exige 3+ anos para vaga júnior");
   }
 
@@ -155,22 +171,16 @@ export async function scoreJob(job: NormalizedJob, candidate: CandidateProfile):
     breakdown.push({ category: "lowPriorityPenalty", points: -8, maxPoints: 0, detail: "techs de baixa prioridade como nucleo" });
   }
 
-  // Bonus do currículo (até 20 pontos)
-  try {
-    const resumeBonus = await calculateResumeBonus(job.technologies);
-    if (resumeBonus.bonusPoints > 0) {
-      score += resumeBonus.bonusPoints;
-      reasons.push(...resumeBonus.matchDetails);
-      breakdown.push({
-        category: "resumeMatch",
-        points: resumeBonus.bonusPoints,
-        maxPoints: 20,
-        detail: resumeBonus.matchDetails.join("; ") || "match com currículo",
-      });
+  if (resume) {
+    for (const factor of breakdown.slice(1)) {
+      const maxPoints = factor.category === "workModel" || factor.category === "seniority"
+        ? Math.ceil(factor.maxPoints / 2)
+        : Math.floor(factor.maxPoints / 2);
+      factor.points = Math.round(factor.maxPoints ? factor.points * maxPoints / factor.maxPoints : factor.points / 2);
+      factor.maxPoints = maxPoints;
     }
-  } catch (error) {
-    // Se houver erro ao buscar currículo, não penaliza a vaga
-    console.error("[score] Error calculating resume bonus:", error);
+    score = breakdown.reduce((total, factor) => total + factor.points, 0);
+    for (const [index, reason] of reasons.entries()) reasons[index] = reason.replace(/ \(\+\d+\)/g, "");
   }
 
   score = Math.max(0, Math.min(100, score));

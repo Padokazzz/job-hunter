@@ -9,6 +9,7 @@ dist
 .git
 tests
 curriculo
+uploads
 candidatura autmatica.md
 dash.err
 dash.log

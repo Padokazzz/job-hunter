@@ -33,7 +33,7 @@ services:
     build: .
     container_name: job-hunter-dashboard
     ports:
-      - "${DASHBOARD_PORT:-3000}:3000"
+      - "127.0.0.1:${DASHBOARD_PORT:-3000}:3000"
     env_file:
       - .env
     environment:
@@ -64,6 +64,7 @@ services:
       - JOBHUNTER_DB_CONFIRMED=1
     volumes:
       - bot-uploads:/app/uploads
+      - ./curriculo:/app/curriculo:ro
     depends_on:
       init-db:
         condition: service_completed_successfully
@@ -83,6 +84,7 @@ services:
       - JOBHUNTER_DB_CONFIRMED=1
     volumes:
       - bot-uploads:/app/uploads
+      - ./curriculo:/app/curriculo:ro
     depends_on:
       init-db:
         condition: service_completed_successfully

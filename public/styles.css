@@ -415,3 +415,10 @@ hr { border: none; border-top: 1px solid var(--border); margin: 14px 0; }
   .cards { grid-template-columns: repeat(2, 1fr); }
   .grid-2 { grid-template-columns: 1fr; }
 }
+
+.apps-filters { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; }
+.apps-filters label { display: grid; gap: 4px; }
+#apps-pagination[hidden], #jobs-retry[hidden], #apps-retry[hidden] { display: none; }
+#apps-pagination { display: flex; gap: 8px; margin-top: 12px; }
+
+#page-applications .table-wrap { overflow-x: auto; }

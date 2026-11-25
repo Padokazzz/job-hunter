@@ -3,9 +3,11 @@ import { prisma } from "./shared/db.js";
 import { logger } from "./shared/logger.js";
 import { candidate } from "./config/candidate.js";
 import { normalize, type RawJob } from "./jobs/normalize.js";
+import { detectPostingLanguage } from "./jobs/posting-language.js";
 import { dedupHash } from "./jobs/dedup.js";
 import type { NormalizedJob, ScoreResult } from "./jobs/types.js";
 import { evaluateGlobalFilter } from "./jobs/filter.js";
+import { getResumeRankingProfile, type ResumeRankingProfile } from "./scoring/resume-match.js";
 import { scoreJob } from "./scoring/score.js";
 import { buildReport, type ScoredJob } from "./report/report.js";
 import { getEnabledSources } from "./sources/index.js";
@@ -61,7 +63,6 @@ async function updateJobRecord(
   job: NormalizedJob,
   result: ScoreResult,
 ): Promise<void> {
-  await prisma.scoreBreakdown.deleteMany({ where: { jobId: id } });
   await prisma.job.update({
     where: { id },
     data: {
@@ -71,26 +72,21 @@ async function updateJobRecord(
       workModel: job.workModel,
       seniority: job.seniority,
       english: job.english,
+      postingLanguage: detectPostingLanguage(job.title, job.description),
       score: result.score,
       classification: result.classification,
       matchReasons: result.reasons.join(" | "),
       concerns: result.concerns.join(" | "),
       technologies: job.technologies.join(", "),
-      updatedAt: new Date(),
+      breakdown: {
+        deleteMany: {},
+        create: result.breakdown,
+      },
     },
-  });
-  await prisma.scoreBreakdown.createMany({
-    data: result.breakdown.map((b) => ({
-      jobId: id,
-      category: b.category,
-      points: b.points,
-      maxPoints: b.maxPoints,
-      detail: b.detail ?? null,
-    })),
   });
 }
 
-async function runSource(sourceId: string): Promise<SourceStats> {
+async function runSource(sourceId: string, resume: ResumeRankingProfile | null): Promise<SourceStats> {
   const source = getEnabledSources().find((s) => s.id === sourceId)!;
   const run = await prisma.collectionRun.create({
     data: { sourceId, status: "RUNNING", jobsFound: 0, jobsNew: 0, jobsRelevant: 0 },
@@ -118,7 +114,7 @@ async function runSource(sourceId: string): Promise<SourceStats> {
       }
 
       const hash = dedupHash(job);
-      const result = await scoreJob(job, candidate);
+      const result = await scoreJob(job, candidate, resume);
       const relevant = result.classification !== "DISCARD" && result.classification !== "LOW";
       if (relevant) stats.jobsRelevant++;
 
@@ -153,6 +149,7 @@ async function runSource(sourceId: string): Promise<SourceStats> {
             technologies: job.technologies.join(", "),
             seniority: job.seniority,
             english: job.english,
+            postingLanguage: detectPostingLanguage(job.title, job.description),
             publishedAt: job.publishedAt,
             dedupHash: hash,
             score: result.score,
@@ -267,8 +264,35 @@ async function generateDailyReport() {
   return { totalFound, totalRelevant, byClassification };
 }
 
+async function rerankSavedJobs(resume: ResumeRankingProfile) {
+  let lastId: string | undefined;
+  let count = 0;
+  for (;;) {
+    const rows = await prisma.job.findMany({
+      where: lastId ? { id: { gt: lastId } } : undefined,
+      orderBy: { id: "asc" },
+      take: 100,
+    });
+    if (!rows.length) break;
+    for (const row of rows) {
+      const job = normalize({ ...row, source: row.sourceId, workModel: row.workModel as NormalizedJob["workModel"] });
+      await updateJobRecord(row.id, job, await scoreJob(job, candidate, resume));
+    }
+    lastId = rows.at(-1)!.id;
+    count += rows.length;
+  }
+  logger.info(`Ranking recalculado para ${count} vagas.`);
+}
+
 async function main() {
   logger.info("=== Job Hunter — rotina de coleta (Fase 2) ===");
+  const resume = await getResumeRankingProfile();
+  if (process.argv.includes("--rerank")) {
+    if (!resume) throw new Error("Adicione um PDF em curriculo/ ou ative um currículo no painel.");
+    await rerankSavedJobs(resume);
+    await prisma.$disconnect();
+    return;
+  }
   await ensureSources();
 
   const enabled = getEnabledSources();
@@ -276,7 +300,7 @@ async function main() {
 
   let anySuccess = false;
   for (const s of enabled) {
-    const stats = await runSource(s.id);
+    const stats = await runSource(s.id, resume);
     logger.info(`[${s.id}] encontradas=${stats.jobsFound} novas=${stats.jobsNew} aderentes=${stats.jobsRelevant}`);
     if (stats.jobsFound > 0) anySuccess = true;
   }
