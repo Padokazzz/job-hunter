@@ -39,6 +39,7 @@ model Job {
   technologies   String
   seniority      String
   english        String
+  postingLanguage String?
   publishedAt    DateTime?
   firstSeenAt    DateTime         @default(now())
   dedupHash      String           @unique
@@ -58,6 +59,7 @@ model Job {
 
   @@unique([sourceId, externalId])
   @@index([score])
+  @@index([postingLanguage])
   @@index([status])
 }
 

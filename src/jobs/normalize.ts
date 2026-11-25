@@ -25,8 +25,9 @@ const TECH_DICT: Array<[string, RegExp]> = [
   ["next.js", /\bnext\.?js\b/i],
   ["react native", /\breact native\b/i],
   ["flutter", /\bflutter\b/i],
-  [".net", /\b\.?net\b|\bdotnet\b/i],
-  ["c#", /\bc#\b|\bcsharp\b/i],
+  ["dart", /\bdart\b/i],
+  [".net", /(?<![\w.])\.net\b|\bdotnet\b/i],
+  ["c#", /\bc#(?!\w)|\bcsharp\b/i],
   ["sql", /\bsql\b/i],
   ["sql server", /\bsql server\b|\bmssql\b/i],
   ["postgresql", /\bpostgre?s?ql\b|\bpostgres\b/i],
@@ -47,6 +48,8 @@ const TECH_DICT: Array<[string, RegExp]> = [
   ["go", /\bgo(lang)?\b/i],
   ["rust", /\brust\b/i],
   ["python", /\bpython\b/i],
+  ["django", /\bdjango\b/i],
+  ["devops", /\bdevops\b/i],
   ["kubernetes", /\bkubernetes\b|\bk8s\b/i],
 ];
 
@@ -67,7 +70,11 @@ function detectWorkModel(title: string, description: string, location: string): 
 }
 
 function detectSeniority(title: string, description: string): Seniority {
-  const t = `${title} ${description}`;
+  const fromTitle = seniorityIn(title);
+  return fromTitle === "UNKNOWN" ? seniorityIn(description) : fromTitle;
+}
+
+function seniorityIn(t: string): Seniority {
   const hasJunior = /\bj[uú]nior\b|\bjr\b|\bjúnior\b/i.test(t);
   const hasPleno = /\bpleno\b|\bmid.level\b|\bmid level\b|\bpl\b/i.test(t);
   const hasSenior = /\bs[eê]nior\b|\bsr\b|\bsênior\b|\btech lead\b|\bespecialista\b|\bprincipal\b/i.test(t);

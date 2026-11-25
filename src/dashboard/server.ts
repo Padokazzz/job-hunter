@@ -4,14 +4,15 @@ import fastifyStatic from "@fastify/static";
 import fastifyMultipart from "@fastify/multipart";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import { prisma } from "../shared/db.js";
 import { logger } from "../shared/logger.js";
 import { generateApplication } from "../applications/generate.js";
 import { parseResumeFromBuffer } from "../shared/resume-parser.js";
-import { invalidateResumeCache } from "../scoring/resume-match.js";
+import { detectPostingLanguage } from "../jobs/posting-language.js";
 import type { NormalizedJob } from "../jobs/types.js";
-import type { Job, ScoreBreakdown, Application, Resume } from "@prisma/client";
+import type { Job, ScoreBreakdown, Application, Prisma } from "@prisma/client";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(__dirname, "..", "..", "public");
@@ -39,6 +40,10 @@ function cached<T>(key: string, ttlMs: number, compute: () => Promise<T>): Promi
   const now = Date.now();
   if (hit && now - hit.ts < ttlMs) return Promise.resolve(hit.data as T);
   return compute().then((data) => {
+    if (memCache.size >= 128) {
+      const oldest = memCache.keys().next().value;
+      if (oldest !== undefined) memCache.delete(oldest);
+    }
     memCache.set(key, { ts: now, data });
     return data;
   });
@@ -57,6 +62,7 @@ function toJobDto(job: Job & { breakdown: ScoreBreakdown[]; applications: Applic
     workModel: job.workModel,
     seniority: job.seniority,
     english: job.english,
+    postingLanguage: job.postingLanguage,
     technologies: job.technologies ? job.technologies.split(", ").filter(Boolean) : [],
     salaryMin: job.salaryMin,
     salaryMax: job.salaryMax,
@@ -75,7 +81,7 @@ function toJobDto(job: Job & { breakdown: ScoreBreakdown[]; applications: Applic
     breakdown: (job.breakdown ?? []).map((b) => ({ category: b.category, points: b.points, maxPoints: b.maxPoints, detail: b.detail })),
     applications: (job.applications ?? []).map((a) => ({
       id: a.id,
-      status: a.status,
+      status: job.status,
       appliedAt: a.appliedAt,
       applicationUrl: a.applicationUrl,
       coverLetter: a.coverLetter,
@@ -85,17 +91,25 @@ function toJobDto(job: Job & { breakdown: ScoreBreakdown[]; applications: Applic
   };
 }
 
-app.get("/api/stats", async () => {
-  const cacheKey = "stats";
+function allowedPostingLanguages(query: unknown): string[] {
+  const includeEnglish = (query as { includeEnglish?: string } | undefined)?.includeEnglish === "true";
+  return includeEnglish ? ["pt", "en"] : ["pt"];
+}
+
+app.get("/api/stats", async (req) => {
+  const languages = allowedPostingLanguages(req.query);
+  const where = { postingLanguage: { in: languages } };
+  const cacheKey = "stats:" + languages.join(",");
   return cached(cacheKey, 120_000, async () => {
-    const total = await prisma.job.count();
-    const byClassificationAgg = await prisma.job.groupBy({ by: ["classification"], _count: { _all: true } });
-    const bySourceAgg = await prisma.job.groupBy({ by: ["sourceId"], _count: { _all: true } });
-    const byStatusAgg = await prisma.job.groupBy({ by: ["status"], _count: { _all: true } });
-    const favorited = await prisma.job.count({ where: { favorited: true } });
+    const total = await prisma.job.count({ where });
+    const byClassificationAgg = await prisma.job.groupBy({ where, by: ["classification"], _count: { _all: true } });
+    const bySourceAgg = await prisma.job.groupBy({ where, by: ["sourceId"], _count: { _all: true } });
+    const byStatusAgg = await prisma.job.groupBy({ where, by: ["status"], _count: { _all: true } });
+    const favorited = await prisma.job.count({ where: { ...where, favorited: true } });
     const applied = await prisma.application.count();
 
     const topCompanies = await prisma.job.groupBy({
+      where,
       by: ["company"],
       _count: { _all: true },
       orderBy: { _count: { company: "desc" } },
@@ -124,26 +138,11 @@ const SORTABLE: Record<string, string> = {
 
 app.get("/api/jobs", async (req, reply) => {
   const q = (req.query as Record<string, string>) ?? {};
-  const conditions: Record<string, unknown>[] = [];
+  const conditions: Prisma.JobWhereInput[] = [];
 
-  if (q.scoreMin) conditions.push({ score: { gte: Number(q.scoreMin) } });
+  if (q.scoreMin && Number.isInteger(Number(q.scoreMin))) conditions.push({ score: { gte: Number(q.scoreMin) } });
 
-  // Senioridade: busca no campo seniority OU no título (jr, pl, sr, etc.)
-  if (q.seniority) {
-    const seniorityTerms: Record<string, string[]> = {
-      JUNIOR: ["junior", "jr", "júnior"],
-      JUNIOR_PLENO: ["junior pleno", "pleno júnior", "pleno junior"],
-      PLENO: ["pleno", "mid level", "mid-level", "pl"],
-      SENIOR: ["senior", "sr", "sênior", "tech lead", "especialista", "principal"],
-    };
-    const terms = seniorityTerms[q.seniority] || [q.seniority.toLowerCase()];
-    conditions.push({
-      OR: [
-        { seniority: q.seniority },
-        ...terms.map((t) => ({ title: { contains: t, mode: "insensitive" as const } })),
-      ],
-    });
-  }
+  if (q.seniority) conditions.push({ seniority: q.seniority });
 
   if (q.workModel) conditions.push({ workModel: q.workModel });
   if (q.english) conditions.push({ english: q.english });
@@ -151,10 +150,14 @@ app.get("/api/jobs", async (req, reply) => {
   if (q.status) conditions.push({ status: q.status });
   if (q.favorited === "true") conditions.push({ favorited: true });
   if (q.viewed === "false") conditions.push({ viewed: false });
-  if (q.search) conditions.push({ title: { contains: q.search, mode: "insensitive" } });
+  for (const term of searchTerms(q.search)) {
+    const match = { contains: term, mode: "insensitive" as const };
+    conditions.push({ OR: [{ title: match }, { company: match }, { technologies: match }] });
+  }
   if (q.location) conditions.push({ location: { contains: q.location, mode: "insensitive" } });
   if (q.company) conditions.push({ company: { contains: q.company, mode: "insensitive" } });
-  if (q.fromDate) conditions.push({ firstSeenAt: { gte: new Date(q.fromDate) } });
+  const fromDate = dayStart(q.fromDate);
+  if (fromDate) conditions.push({ firstSeenAt: { gte: fromDate } });
 
   if (q.stack) {
     const tokens = q.stack.split(",").map((t) => t.trim()).filter(Boolean);
@@ -163,19 +166,14 @@ app.get("/api/jobs", async (req, reply) => {
     });
   }
 
-  const where = conditions.length > 0 ? { AND: conditions } : {};
+  const where = { postingLanguage: { in: allowedPostingLanguages(q) }, AND: conditions };
 
-  const limit = Math.min(Math.max(Number(q.limit ?? 50) || 50, 1), 200);
-  const offset = Math.max(Number(q.offset ?? 0) || 0, 0);
-  const sortKey = SORTABLE[q.sort ?? ""] ? q.sort! : "score";
+  const limit = Math.min(Math.max(Math.trunc(Number(q.limit)) || 50, 1), 200);
+  const offset = Math.min(1_000_000, Math.max(Math.trunc(Number(q.offset)) || 0, 0));
+  const sortKey = Object.hasOwn(SORTABLE, q.sort ?? "") ? q.sort! : "score";
   const order: "asc" | "desc" = q.order === "asc" ? "asc" : "desc";
 
-  const orderBy: Record<string, unknown>[] =
-    sortKey === "favorited"
-      ? [{ favorited: order }]
-      : sortKey === "score"
-        ? [{ favorited: "desc" }, { score: order }]
-        : [{ favorited: "desc" }, { [sortKey]: order }];
+  const orderBy: Prisma.JobOrderByWithRelationInput[] = [{ [SORTABLE[sortKey]!]: order }, { id: "asc" }];
 
   const key = "jobs:" + new URLSearchParams(q as Record<string, string>).toString();
   return cached(key, 30_000, async () => {
@@ -192,7 +190,7 @@ app.get("/api/jobs", async (req, reply) => {
         select: {
           id: true, sourceId: true, company: true, title: true, location: true,
           workModel: true, seniority: true, english: true, score: true,
-          classification: true, status: true, favorited: true, viewed: true,
+          classification: true, status: true, favorited: true, viewed: true, postingLanguage: true,
         firstSeenAt: true, publishedAt: true, url: true, technologies: true,
       },
       }),
@@ -207,10 +205,12 @@ app.get("/api/jobs", async (req, reply) => {
   });
 });
 
-app.get("/api/jobs/recent", async () => {
-  return cached("jobs:recent", 30_000, async () => {
+app.get("/api/jobs/recent", async (req) => {
+  const languages = allowedPostingLanguages(req.query);
+  return cached("jobs:recent:" + languages.join(","), 30_000, async () => {
     const jobs = await prisma.job.findMany({
       where: {
+        postingLanguage: { in: languages },
         score: { gte: 40 },
         classification: { in: ["PRIORITARY", "GOOD", "SECONDARY"] },
       },
@@ -240,9 +240,11 @@ app.get("/api/jobs/recent", async () => {
   });
 });
 
-app.get("/api/companies", async () => {
-  return cached("/api/companies", 60_000, async () => {
+app.get("/api/companies", async (req) => {
+  const languages = allowedPostingLanguages(req.query);
+  return cached("/api/companies:" + languages.join(","), 60_000, async () => {
     const rows = await prisma.job.groupBy({
+      where: { postingLanguage: { in: languages } },
       by: ["company"],
       _count: { _all: true },
       orderBy: { _count: { company: "desc" } },
@@ -269,7 +271,7 @@ app.post("/api/jobs/:id/action", async (req, reply) => {
   // Preparar candidatura: gera o pacote (carta/mensagem/respostas) a partir do
   // curriculo REAL e grava em Application. NAO envia — envio e humano.
   if (action === "prepare") {
-    const jobRow = await prisma.job.findUnique({ where: { id }, include: { applications: true } });
+    const jobRow = await prisma.job.findUnique({ where: { id } });
     if (!jobRow) return reply.code(404).send({ error: "not found" });
 
     const normalized: NormalizedJob = {
@@ -311,46 +313,36 @@ app.post("/api/jobs/:id/action", async (req, reply) => {
       answers: gen.answers,
     });
 
-    const existing = jobRow.applications[0];
-    let application: Application;
-    if (existing) {
-      application = await prisma.application.update({
-        where: { id: existing.id },
-        data: { coverLetter: gen.coverLetter, resumeVersion: gen.resumeVersion, notes: notesPayload, status: "APPLICATION_READY" },
-      });
-    } else {
-      application = await prisma.application.create({
-        data: {
-          jobId: id,
-          coverLetter: gen.coverLetter,
-          resumeVersion: gen.resumeVersion,
-          notes: notesPayload,
-          status: "APPLICATION_READY",
-        },
-      });
-    }
-
-    await prisma.job.update({ where: { id }, data: { status: "APPLICATION_READY" } });
+    const application = await prisma.$transaction(async (tx) => {
+      const job = await tx.job.update({ where: { id }, data: { updatedAt: new Date() } });
+      const existing = await tx.application.findFirst({ where: { jobId: id }, orderBy: { createdAt: "desc" } });
+      const status = existing && applicationStages.includes(job.status) ? job.status : "APPLICATION_READY";
+      const data = { coverLetter: gen.coverLetter, resumeVersion: gen.resumeVersion, notes: notesPayload, status };
+      await tx.job.update({ where: { id }, data: { status } });
+      return existing
+        ? tx.application.update({ where: { id: existing.id }, data })
+        : tx.application.create({ data: { ...data, jobId: id } });
+    });
     logger.info(`[aplicacao] preparada para ${jobRow.title} (${jobRow.company}) - pacote gerado`);
-    invalidate("/api/jobs"); invalidate("/api/stats");
-    return { ok: true, status: "APPLICATION_READY", applicationId: application.id };
+    invalidate("jobs:"); invalidate("stats");
+    return { ok: true, status: application.status, applicationId: application.id };
   }
 
   // Confirmacao HUMANA de envio. O bot nunca envia automaticamente nem
   // contorna CAPTCHA/2FA/anti-bot (doc sec. 16).
   if (action === "applied") {
-    const jobRow = await prisma.job.findUnique({ where: { id }, include: { applications: true } });
+    const jobRow = await prisma.job.findUnique({ where: { id } });
     if (!jobRow) return reply.code(404).send({ error: "not found" });
     const url = typeof value === "string" && value ? value : jobRow.url;
 
-    const existing = jobRow.applications[0];
-    if (existing) {
-      await prisma.application.update({ where: { id: existing.id }, data: { status: "APPLIED", appliedAt: new Date(), applicationUrl: url } });
-    } else {
-      await prisma.application.create({ data: { jobId: id, status: "APPLIED", appliedAt: new Date(), applicationUrl: url } });
-    }
-    await prisma.job.update({ where: { id }, data: { status: "APPLIED" } });
-    invalidate("/api/jobs"); invalidate("/api/stats");
+    await prisma.$transaction(async (tx) => {
+      await tx.job.update({ where: { id }, data: { status: "APPLIED" } });
+      const existing = await tx.application.findFirst({ where: { jobId: id }, orderBy: { createdAt: "desc" } });
+      const data = { status: "APPLIED", appliedAt: existing?.appliedAt ?? new Date(), applicationUrl: url };
+      if (existing) await tx.application.update({ where: { id: existing.id }, data });
+      else await tx.application.create({ data: { ...data, jobId: id } });
+    });
+    invalidate("jobs:"); invalidate("stats");
     return { ok: true, status: "APPLIED" };
   }
 
@@ -378,13 +370,13 @@ app.post("/api/jobs/:id/action", async (req, reply) => {
 
   if (action === "view") {
     const current = await prisma.job.findUnique({ where: { id }, select: { status: true } });
-    if (current && ["APPLIED", "INTERVIEW", "APPLICATION_READY", "APPROVED", "REJECTED", "CLOSED"].includes(current.status)) {
+    if (current && ["APPLIED", "INTERVIEW", "OFFER", "APPLICATION_READY", "APPROVED", "REJECTED", "CLOSED"].includes(current.status)) {
       delete update.status;
     }
   }
 
   const job = await prisma.job.update({ where: { id }, data: update });
-  invalidate("/api/jobs"); invalidate("/api/stats");
+  invalidate("jobs:"); invalidate("stats");
   return { ok: true, status: job.status, favorited: job.favorited };
 });
 
@@ -421,24 +413,90 @@ app.get("/api/reports", async () => {
   }));
 });
 
-app.get("/api/applications", async () => {
-  const apps = await prisma.application.findMany({
-    orderBy: { createdAt: "desc" },
-    include: { job: { select: { title: true, company: true, url: true } } },
+const applicationStages = ["APPLICATION_READY", "APPLIED", "INTERVIEW", "OFFER", "REJECTED", "CLOSED"];
+
+function searchTerms(value: unknown): string[] {
+  return typeof value === "string" ? value.trim().slice(0, 160).split(/\s+/).filter(Boolean).slice(0, 8) : [];
+}
+
+function dayStart(value: unknown): Date | undefined {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return;
+  const date = new Date(value + "T00:00:00.000Z");
+  if (Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value) return date;
+}
+
+app.get("/api/applications", async (req, reply) => {
+  const q = req.query as Record<string, string>;
+  const since = dayStart(q.since);
+  const until = dayStart(q.until);
+  if ((q.since && !since) || (q.until && !until) || (since && until && since > until)) {
+    return reply.code(400).send({ error: "Informe um período válido." });
+  }
+  if (until) until.setUTCDate(until.getUTCDate() + 1);
+  for (const [date, offset] of [[since, q.sinceOffset], [until, q.untilOffset]] as const) {
+    const minutes = Number(offset);
+    if (date && Number.isInteger(minutes) && Math.abs(minutes) <= 14 * 60) {
+      date.setUTCMinutes(minutes);
+    }
+  }
+
+  const where: Prisma.ApplicationWhereInput = {
+    job: {
+      status: q.stage && applicationStages.includes(q.stage) ? q.stage : undefined,
+      AND: searchTerms(q.search).map((term) => ({
+        OR: [
+          { title: { contains: term, mode: "insensitive" } },
+          { company: { contains: term, mode: "insensitive" } },
+        ],
+      })),
+    },
+    appliedAt: since || until ? { gte: since, lt: until } : undefined,
+  };
+  const limit = 25;
+  const offset = Math.min(1_000_000, Math.max(0, Math.trunc(Number(q.offset) || 0)));
+  const [total, apps] = await Promise.all([
+    prisma.application.count({ where }),
+    prisma.application.findMany({
+      where,
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      skip: offset,
+      take: limit,
+      select: {
+        id: true, jobId: true, appliedAt: true, applicationUrl: true,
+        job: { select: { title: true, company: true, url: true, status: true } },
+      },
+    }),
+  ]);
+  return {
+    total, offset, limit,
+    items: apps.map(({ job, ...application }) => ({
+      ...application, jobTitle: job.title, company: job.company, jobUrl: job.url, status: job.status,
+    })),
+  };
+});
+
+app.patch("/api/applications/:id/stage", async (req, reply) => {
+  const { id } = req.params as { id: string };
+  const { stage } = (req.body ?? {}) as { stage?: string };
+  if (!stage || !applicationStages.includes(stage)) {
+    return reply.code(400).send({ error: "Etapa inválida." });
+  }
+  const changed = await prisma.$transaction(async (tx) => {
+    const application = await tx.application.findUnique({ where: { id }, select: { jobId: true } });
+    if (!application) return false;
+    await tx.job.update({ where: { id: application.jobId }, data: { status: stage } });
+    await tx.application.updateMany({ where: { jobId: application.jobId }, data: { status: stage } });
+    if (stage === "APPLIED") {
+      await tx.application.updateMany({
+        where: { jobId: application.jobId, appliedAt: null },
+        data: { appliedAt: new Date() },
+      });
+    }
+    return true;
   });
-  return apps.map((a) => ({
-    id: a.id,
-    jobId: a.jobId,
-    jobTitle: a.job.title,
-    company: a.job.company,
-    status: a.status,
-    appliedAt: a.appliedAt,
-    applicationUrl: a.applicationUrl,
-    coverLetter: a.coverLetter,
-    resumeVersion: a.resumeVersion,
-    notes: a.notes,
-    jobUrl: a.job.url,
-  }));
+  if (!changed) return reply.code(404).send({ error: "Candidatura não encontrada." });
+  invalidate("jobs:"); invalidate("stats");
+  return { ok: true };
 });
 
 // Rotas de upload de currículo
@@ -501,36 +559,38 @@ app.post("/api/resume/upload", async (req, reply) => {
     }
 
     const parsed = await parseResumeFromBuffer(buffer);
+    if (!parsed.textContent.trim() || !parsed.technologies.length) {
+      return reply.code(422).send({ error: "O PDF não contém tecnologias reconhecíveis no texto." });
+    }
 
-    const fileName = `${Date.now()}-${data.filename}`;
+    const fileName = `${randomUUID()}-${path.basename(data.filename)}`;
     const uploadDir = path.join(__dirname, "..", "..", "uploads");
     if (!fs.existsSync(uploadDir)) {
       fs.mkdirSync(uploadDir, { recursive: true });
     }
-    fs.writeFileSync(path.join(uploadDir, fileName), buffer);
+    await fs.promises.writeFile(path.join(uploadDir, fileName), buffer, { mode: 0o600 });
 
-    // Desativar currículos anteriores
-    await prisma.resume.updateMany({
-      where: { isActive: true },
-      data: { isActive: false },
-    });
-
-    const resume = await prisma.resume.create({
-      data: {
-        fileName,
-        originalName: data.filename,
-        textContent: parsed.textContent,
-        technologies: JSON.stringify(parsed.technologies),
-        experience: JSON.stringify(parsed.experience),
-        education: JSON.stringify(parsed.education),
-        skills: JSON.stringify(parsed.skills),
-        isActive: true,
-      },
+    const [, resume] = await prisma.$transaction([
+      prisma.resume.updateMany({ where: { isActive: true }, data: { isActive: false } }),
+      prisma.resume.create({
+        data: {
+          fileName,
+          originalName: data.filename,
+          textContent: parsed.textContent,
+          technologies: JSON.stringify(parsed.technologies),
+          experience: JSON.stringify(parsed.experience),
+          education: JSON.stringify(parsed.education),
+          skills: JSON.stringify(parsed.skills),
+          isActive: true,
+        },
+      }),
+    ]).catch(async (error) => {
+      await fs.promises.unlink(path.join(uploadDir, fileName)).catch(() => {});
+      throw error;
     });
 
     invalidate("/api/resume");
     invalidate("/api/settings");
-    invalidateResumeCache();
 
     logger.info(`[resume] Currículo uploaded: ${data.filename} - ${parsed.technologies.length} tecnologias detectadas`);
 
@@ -582,7 +642,6 @@ app.delete("/api/resume/:id", async (req, reply) => {
 
   invalidate("/api/resume");
   invalidate("/api/settings");
-  invalidateResumeCache();
 
   return { ok: true };
 });
@@ -607,7 +666,6 @@ app.post("/api/resume/:id/activate", async (req, reply) => {
 
   invalidate("/api/resume");
   invalidate("/api/settings");
-  invalidateResumeCache();
 
   return { ok: true };
 });
@@ -617,7 +675,7 @@ app.get("/api/reports/:id", async (req, reply) => {
   const r = await prisma.dailyReport.findUnique({ where: { id } });
   if (!r) return reply.code(404).send({ error: "not found" });
   const topIds: string[] = JSON.parse(r.topJobIds || "[]");
-  const jobs = await prisma.job.findMany({ where: { id: { in: topIds } } });
+  const jobs = await prisma.job.findMany({ where: { id: { in: topIds }, postingLanguage: { in: allowedPostingLanguages(req.query) } } });
   return {
     ...r,
     byClassification: JSON.parse(r.byClassification || "{}"),
@@ -632,7 +690,26 @@ const keepWarm = () => {
   // Aquece exatamente a consulta que a UI faz ao abrir "Vagas" (limit=50, sem filtros)
   fetch(`${base}/api/jobs?limit=50&offset=0&sort=score&order=desc`).catch(() => {});
 };
-app.listen({ port: PORT, host: "0.0.0.0" }).then(async () => {
+async function classifySavedPostings() {
+  let count = 0;
+  for (;;) {
+    const rows = await prisma.job.findMany({
+      where: { postingLanguage: null },
+      select: { id: true, title: true, description: true },
+      orderBy: { id: "asc" },
+      take: 100,
+    });
+    if (!rows.length) break;
+    await prisma.$transaction(rows.map((row) => prisma.job.updateMany({
+      where: { id: row.id, postingLanguage: null },
+      data: { postingLanguage: detectPostingLanguage(row.title, row.description) },
+    })));
+    count += rows.length;
+  }
+  if (count) logger.info(`Idioma identificado para ${count} vagas existentes.`);
+}
+
+classifySavedPostings().then(() => app.listen({ port: PORT, host: "0.0.0.0" })).then(async () => {
   logger.info(`Dashboard em http://localhost:${PORT} (aquecendo cache...)`);
   // Aquece o pool do Supabase e o cache ANTES do primeiro usuario abrir a pagina,
   // para o 1o acesso e o auto-refresh nunca pagarem o custo frio do pooler.

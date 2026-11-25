@@ -60,3 +60,12 @@ test("score sempre entre 0 e 100", async () => {
     assert.ok(r.score >= 0 && r.score <= 100);
   }
 });
+
+test("o PDF determina a aderência e aliases não inflam a correspondência", async () => {
+  const resume = { technologies: ["node", "node.js", "c#"], experienceYears: 2, experienceLevel: "junior" };
+  const compatible = await scoreJob(makeJob({ technologies: ["node.js", "node", "c#"] }), candidate, resume);
+  const unrelated = await scoreJob(makeJob({ technologies: ["react", "typescript", "sql"] }), candidate, resume);
+  assert.equal(compatible.breakdown.find((item) => item.category === "resumeMatch")?.points, 70);
+  assert.equal(unrelated.breakdown.find((item) => item.category === "resumeMatch")?.points, 0);
+  assert.ok(compatible.score > unrelated.score);
+});

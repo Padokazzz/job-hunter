@@ -55,6 +55,9 @@
           <span class="si">🔍</span>
           <input type="text" id="global-search" placeholder="Buscar vaga, empresa, stack…" />
         </div>
+        <label class="switch" title="Exibir anúncios escritos em inglês junto com os de português">
+          <input type="checkbox" id="include-english" autocomplete="off" /> Incluir vagas em inglês
+        </label>
         <label class="switch" title="Atualizar automaticamente">
           <input type="checkbox" id="auto-refresh" /> Auto
         </label>
@@ -106,7 +109,7 @@
                 </div>
                 <div><label>Localização</label><input type="text" id="f-location" placeholder="São Paulo" /></div>
                 <div><label>Fonte</label><select id="f-source"><option value=""></option></select></div>
-                <div><label>Idioma</label>
+                <div><label>Inglês exigido</label>
                   <select id="f-english"><option value=""></option><option>NONE</option><option>TECHNICAL</option><option>INTERMEDIATE</option><option>ADVANCED</option></select>
                 </div>
                 <div><label>Status</label>
@@ -116,7 +119,7 @@
                     <option>REJECTED</option><option>CLOSED</option>
                   </select>
                 </div>
-                <div><label>Busca</label><input type="text" id="f-search" placeholder="termo..." /></div>
+                <div><label>Busca</label><input type="text" id="f-search" placeholder="Cargo, empresa ou tecnologia" /></div>
                 <div><label>Empresa</label><select id="f-company"><option value=""></option></select></div>
                 <div class="chk"><label style="margin:0"><input type="checkbox" id="f-fav" /> Favoritadas</label></div>
               </div>
@@ -128,7 +131,7 @@
           </div>
 
           <div class="toolbar">
-            <span class="result-line" id="jobs-count">—</span>
+            <span class="result-line" id="jobs-count" role="status">—</span>
             <div class="grow"></div>
             <div class="chip-row" id="quick-chips">
               <span class="chip" data-q="fav">⭐ Favoritas</span>
@@ -155,6 +158,7 @@
               <tbody id="jobs-body"></tbody>
             </table>
             <div class="loadmore" id="loadmore-wrap" style="display:none">
+              <button id="jobs-retry" hidden>Tentar novamente</button>
               <button id="btn-loadmore">Carregar mais</button>
             </div>
             <div class="empty" id="jobs-empty" style="display:none">Nenhuma vaga encontrada.</div>
@@ -195,12 +199,26 @@
         <!-- APPLICATIONS -->
         <section class="page" id="page-applications">
           <h2 class="section-title">Candidaturas</h2>
+          <form id="apps-filters" class="panel apps-filters" aria-label="Filtros de candidaturas">
+            <label>Vaga ou empresa <input name="search" type="search" maxlength="160" /></label>
+            <label>Etapa <select name="stage"><option value="">Todas</option></select></label>
+            <label>Envio a partir de <input name="since" type="date" /></label>
+            <label>Envio até <input name="until" type="date" /></label>
+            <button type="submit">Filtrar</button>
+            <button type="button" id="apps-clear">Limpar</button>
+          </form>
+          <p id="apps-count" role="status"></p>
+          <button type="button" id="apps-retry" hidden>Tentar novamente</button>
           <div class="table-wrap">
             <table id="apps-table">
               <thead><tr><th>Vaga</th><th>Empresa</th><th>Status</th><th>Enviada em</th><th>Link</th></tr></thead>
               <tbody id="apps-body"></tbody>
             </table>
             <div class="empty" id="apps-empty" style="display:none">Nenhuma candidatura.</div>
+          </div>
+          <div class="loadmore" id="apps-pagination" hidden>
+            <button type="button" id="apps-prev">Anterior</button>
+            <button type="button" id="apps-next">Próxima</button>
           </div>
         </section>
 
@@ -264,6 +282,6 @@
 
   <div class="toasts" id="toasts"></div>
 
-  <script type="module" src="/app.js"></script>
+  <script type="module" src="/app.js?v=idioma-vagas"></script>
 </body>
 </html>

@@ -26,9 +26,8 @@ const TECH_PATTERNS: Record<string, RegExp[]> = {
   "next.js": [/\bnext\.?js\b/i, /\bnext\b/i],
   "vue": [/\bvue\.?js\b/i, /\bvue\b/i],
   "angular": [/\bangular\b/i],
-  "node": [/\bnode\.?js\b/i],
-  ".net": [/\b\.net\b/i, /\bdotnet\b/i],
-  "c#": [/\bc#\b/i, /\bcsharp\b/i],
+  ".net": [/(?<![\w.])\.net\b/i, /\bdotnet\b/i],
+  "c#": [/\bc#(?!\w)/i, /\bcsharp\b/i],
   "python": [/\bpython\b/i],
   "java": [/\bjava\b/i, /\bjava\b(?!script)/i],
   "php": [/\bphp\b/i],
@@ -224,24 +223,12 @@ function extractSkills(text: string): string[] {
 }
 
 export async function parseResumeFromPDF(filePath: string): Promise<ParsedResume> {
-  const buffer = fs.readFileSync(filePath);
-  const parser = new PDFParse({ data: buffer });
-  const textResult = await parser.getText();
-  const text = textResult.text;
-
-  return {
-    textContent: text,
-    technologies: extractTechnologies(text),
-    experience: extractExperience(text),
-    education: extractEducation(text),
-    skills: extractSkills(text),
-  };
+  return parseResumeFromBuffer(await fs.promises.readFile(filePath));
 }
 
 export async function parseResumeFromBuffer(buffer: Buffer): Promise<ParsedResume> {
   const parser = new PDFParse({ data: buffer });
-  const textResult = await parser.getText();
-  const text = textResult.text;
+  const text = await parser.getText().then((result) => result.text).finally(() => parser.destroy());
 
   return {
     textContent: text,

@@ -1,6 +1,6 @@
 // Perfil do candidato para scoring e geracao de candidaturas.
 //
-// O scoring usa ESTA configuracao como fonte unica de verdades sobre o perfil.
+// Preferências de coleta e pontuação. A stack deste perfil é usada quando não há PDF base.
 // Para dados pessoais (nome, email), use variaveis de ambiente:
 //   CANDIDATE_NAME="Seu Nome"
 //   CANDIDATE_EMAIL="seu@email.com"

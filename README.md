@@ -93,14 +93,21 @@ As categorias e pesos são regras de triagem definidas no projeto, não uma aval
 
 A interface permite:
 
-- Consultar e filtrar oportunidades.
+- Consultar vagas em português. A opção **Incluir vagas em inglês** no cabeçalho libera o inglês e lembra a escolha neste navegador. O painel oculta anúncios cujo idioma não consegue identificar.
 - Ordenar vagas por pontuação e outros atributos.
 - Favoritar e atualizar o status de vagas.
+- Em **Candidaturas**, buscar por vaga ou empresa, filtrar por etapa e data de envio e atualizar o acompanhamento direto na tabela.
 - Visualizar detalhes, motivos de compatibilidade e pontos de atenção.
 - Acompanhar fontes e execuções de coleta.
 - Consultar relatórios.
 - Enviar um currículo em PDF para extração de informações, conforme os limites implementados.
 - Preparar materiais de candidatura para revisão.
+
+### Ranking por currículo
+
+O ranking usa o PDF ativo em **Configuração**. Sem currículo ativo no banco, o coletor lê o único PDF em `curriculo/`, uma pasta ignorada pelo Git e montada em modo somente leitura no coletor Docker. A correspondência entre as tecnologias detectadas vale até 70 dos 100 pontos.
+
+Para recalcular as vagas já salvas sem consultar fontes externas, execute `npm run run -- --rerank` com a conexão do projeto configurada.
 
 ## Candidaturas e controle humano
 

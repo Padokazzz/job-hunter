@@ -5,7 +5,11 @@ const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
 
 async function api(path, opts = {}) {
-  const res = await fetch(path, { credentials: "same-origin", headers: { Accept: "application/json" }, ...opts });
+  const timeout = AbortSignal.timeout(20000);
+  const signal = opts.signal ? AbortSignal.any([opts.signal, timeout]) : timeout;
+  const res = await fetch(path, {
+    credentials: "same-origin", headers: { Accept: "application/json" }, ...opts, signal,
+  });
   if (!res.ok) {
     let detail = "";
     try { const j = await res.json(); detail = j.error || JSON.stringify(j); } catch (e) {}
@@ -73,6 +77,8 @@ function toast(text, type = "") {
 const pages = ["dashboard", "jobs", "sources", "reports", "applications", "settings"];
 const pageTitles = { dashboard: "Dashboard", jobs: "Vagas", sources: "Fontes", reports: "Relatórios", applications: "Candidaturas", settings: "Configuração" };
 
+function currentPage() { return location.hash.slice(1).split("?")[0] || "dashboard"; }
+
 function showPage(name) {
   pages.forEach((p) => $("#page-" + p).classList.toggle("active", p === name));
   $$("#nav a").forEach((a) => a.classList.toggle("active", a.dataset.page === name));
@@ -81,17 +87,40 @@ function showPage(name) {
   if (name === "jobs") { ensureSourcesForFilter(); ensureCompaniesForFilter(); loadJobs({ reset: true }); }
   if (name === "sources") loadSources();
   if (name === "reports") loadReports();
-  if (name === "applications") loadApplications();
+  if (name === "applications") { restoreApplicationFilters(); loadApplications(); }
   if (name === "settings") loadSettings();
 }
 $$("#nav a").forEach((a) => a.addEventListener("click", (e) => {
   e.preventDefault();
   location.hash = a.dataset.page;
-  showPage(a.dataset.page);
+
 }));
 window.addEventListener("hashchange", () => {
-  const p = location.hash.replace("#", "");
+  const p = currentPage();
   if (pages.includes(p)) showPage(p);
+});
+
+const includeEnglishToggle = $("#include-english");
+try {
+  includeEnglishToggle.checked = localStorage.getItem("includeEnglishPostings") === "true";
+} catch {}
+
+function postingLanguagePath(path) {
+  return includeEnglishToggle.checked ? path + "?includeEnglish=true" : path;
+}
+
+includeEnglishToggle.addEventListener("change", () => {
+  try {
+    localStorage.setItem("includeEnglishPostings", String(includeEnglishToggle.checked));
+  } catch {}
+  const company = $("#f-company");
+  company.options.length = 1;
+  if (currentPage() === "reports") {
+    $("#report-detail-content").style.display = "none";
+    $("#report-detail-empty").style.display = "block";
+  }
+  if (currentPage() === "dashboard") $("#dash-recent").textContent = "Atualizando vagas…";
+  if (["dashboard", "jobs", "settings"].includes(currentPage())) showPage(currentPage());
 });
 
 /* ============ bar list ============ */
@@ -110,16 +139,18 @@ function barList(targetId, obj) {
 
 /* ============ DASHBOARD ============ */
 async function loadDashboard() {
+  const includeEnglish = includeEnglishToggle.checked;
   try {
     const [s, recentJobs] = await Promise.all([
-      cachedApi("/api/stats", 30000),
-      cachedApi("/api/jobs/recent", 30000).catch(() => []),
+      cachedApi(postingLanguagePath("/api/stats"), 30000),
+      cachedApi(postingLanguagePath("/api/jobs/recent"), 30000).catch(() => []),
     ]);
+    if (includeEnglish !== includeEnglishToggle.checked || currentPage() !== "dashboard") return;
     $("#dbmode-text").textContent = "DB: " + (s.dbMode || "—");
     $("#nav-dash").textContent = s.total;
     $("#nav-jobs").textContent = s.byStatus?.NEW != null ? s.byStatus.NEW : "·";
     const cards = [
-      { label: "Total de vagas", value: s.total, hint: "no banco" },
+      { label: "Total de vagas", value: s.total, hint: "nos idiomas selecionados" },
       { label: "Favoritadas", value: s.favorited, hint: "★" },
       { label: "Candidaturas", value: s.applied, hint: "enviadas/aprovadas" },
       { label: "Relevantes (GOOD+)", value: (s.byClassification?.GOOD || 0) + (s.byClassification?.PRIORITARY || 0), hint: "aderência alta" },
@@ -149,7 +180,7 @@ async function loadDashboard() {
           </tr>`;
         }).join("")}
         </tbody></table>
-        <div style="text-align:center;margin-top:12px"><a href="#jobs" onclick="showPage('jobs')" class="btn-link">Ver todas as vagas →</a></div>`;
+        <div style="text-align:center;margin-top:12px"><a href="#jobs" class="btn-link">Ver todas as vagas →</a></div>`;
     }
 
     hideMsg();
@@ -179,8 +210,10 @@ async function ensureSourcesForFilter() {
 async function ensureCompaniesForFilter() {
   const sel = $("#f-company");
   if (sel.options.length > 1) return;
+  const includeEnglish = includeEnglishToggle.checked;
   try {
-    const companies = await cachedApi("/api/companies", 60000);
+    const companies = await cachedApi(postingLanguagePath("/api/companies"), 60000);
+    if (includeEnglish !== includeEnglishToggle.checked || sel.options.length > 1) return;
     companies.forEach((c) => {
       const o = document.createElement("option");
       o.value = c.company; o.textContent = `${c.company} (${c.count})`;
@@ -228,6 +261,7 @@ function updateFilterCount() {
 
 function buildQuery(extra = {}) {
   const p = new URLSearchParams();
+  if (includeEnglishToggle.checked) p.set("includeEnglish", "true");
   for (const [k, val] of Object.entries(jobsState.filters)) if (val) p.set(k, val);
   p.set("limit", jobsState.limit);
   p.set("offset", jobsState.offset);
@@ -311,7 +345,7 @@ $$("#quick-chips .chip").forEach((chip) => chip.addEventListener("click", () => 
 /* global search */
 $("#global-search")?.addEventListener("input", debounce(() => {
   const el = $("#f-search"); if (el) el.value = $("#global-search").value;
-  if (location.hash.replace("#", "") !== "jobs") { location.hash = "jobs"; showPage("jobs"); }
+  if (location.hash.replace("#", "") !== "jobs") { location.hash = "jobs"; }
   else loadJobs({ reset: true });
 }, 400));
 
@@ -373,29 +407,53 @@ function updateLoadMore() {
 }
 
 async function loadJobs({ reset = false } = {}) {
-  if (jobsState.loading) return;
-  if (reset) { jobsState.offset = 0; jobsState.items = []; jobsState.filters = readFilters(); }
+  if (jobsState.loading && !reset) return;
+  jobsState.request?.abort();
+  const request = new AbortController();
+  jobsState.request = request;
+  if (reset) {
+    jobsState.offset = 0;
+    jobsState.items = [];
+    jobsState.total = 0;
+    jobsState.filters = readFilters();
+    $("#jobs-body").innerHTML = "";
+    $("#jobs-empty").style.display = "none";
+  }
   jobsState.loading = true;
+  $("#jobs-count").textContent = "Carregando vagas…";
+  $("#jobs-retry").hidden = true;
+  $("#btn-loadmore").disabled = true;
   const sentOffset = jobsState.offset;
   try {
     const cacheKey = "/api/jobs?" + buildQuery();
-    const data = reset ? await api(cacheKey) : await cachedApi(cacheKey, 5000);
+    const data = await api(cacheKey, { signal: request.signal });
+    if (jobsState.request !== request) return;
     const items = data.items || [];
     if (sentOffset === 0) jobsState.items = items;
     else jobsState.items = jobsState.items.concat(items);
     jobsState.total = data.total;
     jobsState.offset = sentOffset + items.length;
     renderJobs();
+    $("#btn-loadmore").hidden = false;
     updateLoadMore();
     const shown = jobsState.items.length;
     $("#jobs-count").innerHTML = `<b>${shown}</b> de <b>${jobsState.total}</b> vagas`;
     if (reset) hideMsg();
   } catch (e) {
-    if (reset) showMsg("Falha ao carregar vagas: " + e.message);
+    if (jobsState.request !== request) return;
+    $("#jobs-count").textContent = "Falha ao carregar vagas.";
+    $("#jobs-retry").hidden = false;
+    $("#loadmore-wrap").style.display = "flex";
+    $("#btn-loadmore").hidden = reset;
   } finally {
-    jobsState.loading = false;
+    if (jobsState.request === request) {
+      jobsState.loading = false;
+      $("#btn-loadmore").disabled = false;
+    }
   }
 }
+
+$("#jobs-retry").addEventListener("click", () => loadJobs({ reset: jobsState.offset === 0 }));
 
 function setSort(key) {
   if (jobsState.sortKey === key) jobsState.sortDir = jobsState.sortDir === "asc" ? "desc" : "asc";
@@ -413,20 +471,40 @@ $$("#jobs-table th[data-sort]").forEach((th) => th.addEventListener("click", () 
 
 /* ============ JOB DRAWER ============ */
 let currentJobId = null;
+let drawerRequest;
 
 function openJobDrawer(job) {
   currentJobId = job.id;
   $("#drawer").classList.add("active");
   $("#m-title").textContent = "Carregando…";
-  api("/api/jobs/" + encodeURIComponent(job.id))
-    .then((j) => { renderDrawer(j); })
-    .catch((e) => showMsg("Falha ao abrir vaga: " + e.message));
+  $("#m-sub").textContent = "";
+  $("#drawer .drawer-body").hidden = true;
+  drawerRequest?.abort();
+  const request = new AbortController();
+  drawerRequest = request;
+  api("/api/jobs/" + encodeURIComponent(job.id), { signal: request.signal })
+    .then((j) => { if (drawerRequest === request) renderDrawer(j); })
+    .catch(() => {
+      if (drawerRequest !== request) return;
+      $("#m-title").textContent = "Falha ao abrir os detalhes";
+      const retry = document.createElement("button");
+      retry.type = "button";
+      retry.textContent = "Tentar novamente";
+      retry.addEventListener("click", () => openJobDrawer(job));
+      $("#m-sub").append(retry);
+    });
 }
-function closeDrawer() { $("#drawer").classList.remove("active"); }
+function closeDrawer() {
+  drawerRequest?.abort();
+  drawerRequest = undefined;
+  currentJobId = null;
+  $("#drawer").classList.remove("active");
+}
 $("#drawer-close").addEventListener("click", closeDrawer);
 $("#drawer").addEventListener("click", (e) => { if (e.target === $("#drawer")) closeDrawer(); });
 
 function renderDrawer(j) {
+  $("#drawer .drawer-body").hidden = false;
   $("#m-title").textContent = j.title || "(sem título)";
   const stack = (j.technologies || []).map((t) => `<span class="pill">${esc(t)}</span>`).join("");
   $("#m-sub").innerHTML = `${esc(j.company || "")} · ${esc(j.location || "")} · ${esc(j.workModel || "")} · ${esc(j.seniority || "")} · ${classTag(j.classification)} · ${statusTag(j.status)} · Score ${j.score != null ? j.score : ""}`;
@@ -464,7 +542,7 @@ function renderApplication(j) {
     <h5 class="app-h">Carta de apresentação</h5><pre class="app-text">${esc(app.coverLetter || "")}</pre>
     <h5 class="app-h">Pontos fortes</h5>${highlightsHtml}
     <h5 class="app-h">Respostas sugeridas</h5><ul class="reasons">${answersHtml}</ul>`;
-  $("#m-applied").disabled = app.status === "APPLIED";
+  $("#m-applied").disabled = app.status !== "APPLICATION_READY";
 }
 
 function updateDrawerButtons(j) {
@@ -472,11 +550,11 @@ function updateDrawerButtons(j) {
   $("#m-view").textContent = j.viewed ? "👁 Vista" : "👁 Marcar vista";
   $("#m-view").disabled = !!j.viewed;
 
-  // Preparar: habilitado sempre que não estiver APPLIED ou INTERVIEW
-  const canPrepare = j.status !== "APPLIED" && j.status !== "INTERVIEW";
+  const canPrepare = !["APPLIED", "INTERVIEW", "OFFER", "REJECTED", "CLOSED"].includes(j.status);
   $("#m-prepare").disabled = !canPrepare;
 
   // Mudar texto do botão se já existe candidatura
+  $("#m-approve").disabled = Boolean(j.applications?.length);
   const hasApplication = j.applications && j.applications.length > 0 &&
     (j.applications[0].coverLetter || j.applications[0].notes);
   if (hasApplication) {
@@ -488,24 +566,28 @@ function updateDrawerButtons(j) {
 
 async function jobAction(action, value, { silent = false } = {}) {
   if (!currentJobId) return;
+  const jobId = currentJobId;
   try {
     const body = value !== undefined ? { action, value } : { action };
-    const r = await api("/api/jobs/" + encodeURIComponent(currentJobId) + "/action", {
+    const r = await api("/api/jobs/" + encodeURIComponent(jobId) + "/action", {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
     });
     if (r && r.ok) {
       if (!silent) toast("Ação: " + action, "ok");
       invalidate("/api/stats");
-      const full = await api("/api/jobs/" + encodeURIComponent(currentJobId));
-      renderDrawer(full);
-      // atualiza a linha na lista, se presente
-      const idx = jobsState.items.findIndex((x) => x.id === currentJobId);
-      if (idx >= 0) { jobsState.items[idx] = { ...jobsState.items[idx], ...full }; renderJobs(); }
+      const full = await api("/api/jobs/" + encodeURIComponent(jobId));
+      if (currentJobId === jobId) renderDrawer(full);
+      if (currentPage() === "applications") loadApplications(applicationsOffset);
+      if (currentPage() === "jobs" && ["favorite", "view", "approve", "ignore", "prepare", "applied"].includes(action)) {
+        loadJobs({ reset: true });
+      }
       if (location.hash.replace("#", "") === "dashboard") loadDashboard();
     } else {
       showMsg("Ação falhou: " + ((r && r.error) || "resposta inesperada"));
+      return false;
     }
-  } catch (e) { showMsg("Erro na ação: " + e.message); }
+    return true;
+  } catch (e) { showMsg("Erro na ação: " + e.message); return false; }
 }
 
 async function toggleFavQuick(job, tr) {
@@ -519,7 +601,11 @@ async function toggleFavQuick(job, tr) {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "favorite", value: newVal }),
     });
     invalidate("/api/stats");
-  } catch (e) { toast("Falha ao favoritar", "error"); }
+  } catch (e) {
+    job.favorited = !newVal;
+    if (star) { star.classList.toggle("off", newVal); star.textContent = newVal ? "☆" : "★"; }
+    toast("Falha ao favoritar", "error");
+  }
 }
 
 $("#m-fav").addEventListener("click", () => jobAction("favorite", true));
@@ -530,7 +616,12 @@ $("#m-prepare").addEventListener("click", () => jobAction("prepare"));
 $("#m-applied").addEventListener("click", () => jobAction("applied", currentJobId ? jobsState.items.find((x) => x.id === currentJobId)?.url : undefined));
 $("#m-save-notes").addEventListener("click", () => {
   const v = $("#m-notes").value;
-  jobAction("notes", v, { silent: true }).then(() => { $("#m-notes-msg").textContent = "salvo ✓"; toast("Nota salva", "ok"); });
+  const jobId = currentJobId;
+  jobAction("notes", v, { silent: true }).then((saved) => {
+    if (!saved || currentJobId !== jobId) return;
+    $("#m-notes-msg").textContent = "salvo ✓";
+    toast("Nota salva", "ok");
+  });
 });
 
 /* ============ SOURCES ============ */
@@ -569,8 +660,10 @@ async function loadReports() {
   } catch (e) { showMsg("Falha ao carregar relatórios: " + e.message); }
 }
 async function loadReportDetail(id) {
+  const includeEnglish = includeEnglishToggle.checked;
   try {
-    const r = await cachedApi("/api/reports/" + encodeURIComponent(id), 60000);
+    const r = await cachedApi(postingLanguagePath("/api/reports/" + encodeURIComponent(id)), 60000);
+    if (includeEnglish !== includeEnglishToggle.checked) return;
     const bd = r.byClassification || {};
     const bdHtml = Object.entries(bd).map(([k, v]) => `<span class="pill">${esc(k)}: ${v}</span>`).join(" ") || "—";
     const jobsHtml = (r.topJobs || []).map((j) => `
@@ -587,20 +680,122 @@ async function loadReportDetail(id) {
 }
 
 /* ============ APPLICATIONS ============ */
-async function loadApplications() {
+const stageLabels = {
+  APPLICATION_READY: "Preparada", APPLIED: "Enviada", INTERVIEW: "Entrevista",
+  OFFER: "Proposta", REJECTED: "Rejeitada", CLOSED: "Encerrada",
+};
+const applicationsForm = $("#apps-filters");
+let applicationsOffset = 0;
+let applicationsRequest;
+
+function stageOptions(selected) {
+  const options = Object.entries(stageLabels).map(([stage, label]) =>
+    `<option value="${stage}" ${stage === selected ? "selected" : ""}>${label}</option>`);
+  if (selected && !Object.hasOwn(stageLabels, selected)) {
+    options.unshift(`<option value="" selected disabled>${esc(selected)}</option>`);
+  }
+  return options.join("");
+}
+
+applicationsForm.elements.stage.insertAdjacentHTML("beforeend", stageOptions());
+function restoreApplicationFilters() {
+  const query = new URLSearchParams(location.hash.split("?")[1]);
+  for (const field of ["search", "stage", "since", "until"]) applicationsForm.elements[field].value = query.get(field) || "";
+}
+
+function applyApplicationFilters() {
+  const query = applicationQuery();
+  const next = "applications" + (query.size ? "?" + query : "");
+  if (location.hash.slice(1) === next) loadApplications();
+  else location.hash = next;
+}
+
+function applicationQuery() {
+  const query = new URLSearchParams();
+  for (const [field, value] of new FormData(applicationsForm)) {
+    if (value.trim()) query.set(field, value.trim());
+  }
+  return query;
+}
+
+applicationsForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  applyApplicationFilters();
+});
+$("#apps-clear").addEventListener("click", () => {
+  applicationsForm.reset();
+  applyApplicationFilters();
+});
+$("#apps-retry").addEventListener("click", () => loadApplications(applicationsOffset));
+$("#apps-prev").addEventListener("click", () => loadApplications(Math.max(0, applicationsOffset - 25)));
+$("#apps-next").addEventListener("click", () => loadApplications(applicationsOffset + 25));
+
+async function loadApplications(offset = 0) {
+  applicationsRequest?.abort();
+  const request = new AbortController();
+  applicationsRequest = request;
+  applicationsOffset = offset;
+  const query = applicationQuery();
+  const hasFilters = query.size > 0;
+  for (const field of ["since", "until"]) {
+    const day = query.get(field);
+    if (!day) continue;
+    const date = new Date(day + "T00:00:00");
+    if (field === "until") date.setDate(date.getDate() + 1);
+    query.set(field + "Offset", date.getTimezoneOffset());
+  }
+  query.set("offset", offset);
+  const count = $("#apps-count");
+  const body = $("#apps-body");
+  count.textContent = "Carregando candidaturas…";
+  body.innerHTML = "";
+  $("#apps-empty").style.display = "none";
+  $("#apps-retry").hidden = true;
+  $("#apps-pagination").hidden = true;
   try {
-    const apps = await cachedApi("/api/applications", 15000);
-    const body = $("#apps-body");
-    if (!apps.length) { body.innerHTML = ""; $("#apps-empty").style.display = "block"; return; }
-    $("#apps-empty").style.display = "none";
-    body.innerHTML = apps.map((a) => `
-      <tr>
-        <td>${esc(a.jobTitle || "")}</td><td>${esc(a.company || "")}</td>
-        <td>${statusTag(a.status || "")}</td><td>${fmtDate(a.appliedAt)}</td>
-        <td>${a.applicationUrl ? `<a href="${esc(a.applicationUrl)}" target="_blank" rel="noopener">apply</a> · ` : ""}${a.jobUrl ? `<a href="${esc(a.jobUrl)}" target="_blank" rel="noopener">vaga</a>` : ""}</td>
+    const { items, total, limit } = await api("/api/applications?" + query, { signal: request.signal });
+    if (applicationsRequest !== request || currentPage() !== "applications") return;
+    if (!items.length && offset > 0) return loadApplications(Math.max(0, Math.ceil(total / limit) * limit - limit));
+    count.textContent = items.length ? `${offset + 1}–${offset + items.length} de ${total} candidaturas` : "0 candidaturas";
+    $("#apps-empty").style.display = items.length ? "none" : "block";
+    $("#apps-empty").textContent = hasFilters ? "Nenhuma candidatura corresponde aos filtros." : "Nenhuma candidatura cadastrada.";
+    body.innerHTML = items.map((a, index) => `
+      <tr data-index="${index}">
+        <td><button type="button" data-open>${esc(a.jobTitle)}</button></td><td>${esc(a.company)}</td>
+        <td><select aria-label="Etapa para ${esc(a.jobTitle)}">${stageOptions(a.status)}</select></td>
+        <td>${fmtDate(a.appliedAt)}</td>
+        <td>${a.applicationUrl ? `<a href="${esc(a.applicationUrl)}" target="_blank" rel="noopener">Envio</a> · ` : ""}${a.jobUrl ? `<a href="${esc(a.jobUrl)}" target="_blank" rel="noopener">Vaga</a>` : ""}</td>
       </tr>`).join("");
-    hideMsg();
-  } catch (e) { showMsg("Falha ao carregar candidaturas: " + e.message); }
+    for (const row of body.rows) {
+      const application = items[Number(row.dataset.index)];
+      row.querySelector("[data-open]").addEventListener("click", () => openJobDrawer({ id: application.jobId }));
+      const select = row.querySelector("select");
+      select.addEventListener("change", async () => {
+        select.disabled = true;
+        try {
+          await api("/api/applications/" + encodeURIComponent(application.id) + "/stage", {
+            method: "PATCH", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ stage: select.value }),
+          });
+          invalidate("/api/stats");
+          toast("Etapa atualizada", "ok");
+          if (currentPage() === "applications") loadApplications(applicationsOffset);
+        } catch (error) {
+          select.value = Object.hasOwn(stageLabels, application.status) ? application.status : "";
+          toast("Falha ao atualizar etapa: " + error.message, "error");
+        } finally {
+          select.disabled = false;
+        }
+      });
+    }
+    $("#apps-pagination").hidden = total <= limit;
+    $("#apps-prev").disabled = offset === 0;
+    $("#apps-next").disabled = offset + limit >= total;
+  } catch (error) {
+    if (applicationsRequest !== request || currentPage() !== "applications") return;
+    count.textContent = "Falha ao carregar candidaturas: " + error.message;
+    $("#apps-retry").hidden = false;
+  }
 }
 
 /* ============ SETTINGS ============ */
@@ -608,7 +803,7 @@ async function loadSettings() {
   const el = $("#settings-content");
   try {
     const [s, resumeData] = await Promise.all([
-      cachedApi("/api/stats", 30000),
+      cachedApi(postingLanguagePath("/api/stats"), 30000),
       api("/api/resume").catch(() => ({ active: null, history: [] })),
     ]);
     const dbMode = s.dbMode || "—";
@@ -675,7 +870,7 @@ async function loadSettings() {
     el.innerHTML = `
       <div style="display:grid;grid-template-columns:200px 1fr;gap:10px;margin-bottom:20px">
         <div class="muted">DB Mode</div><div><strong>${esc(dbMode)}</strong></div>
-        <div class="muted">Vagas no banco</div><div><strong>${s.total}</strong></div>
+        <div class="muted">Vagas nos idiomas selecionados</div><div><strong>${s.total}</strong></div>
         <div class="muted">Candidaturas</div><div><strong>${s.applied}</strong></div>
       </div>
       <hr style="margin-bottom:20px"/>
@@ -768,7 +963,7 @@ async function deleteResume(id) {
 /* ============ refresh / auto-refresh ============ */
 $("#btn-refresh").addEventListener("click", () => {
   invalidate("/api/stats"); invalidate("/api/sources"); invalidate("/api/reports"); invalidate("/api/applications");
-  const p = location.hash.replace("#", "") || "dashboard";
+  const p = currentPage();
   showPage(p);
   const b = $("#btn-refresh");
   b.classList.add("spin");
@@ -788,6 +983,6 @@ $("#auto-refresh").addEventListener("change", (e) => {
 
 /* ============ init ============ */
 (function init() {
-  const p = location.hash.replace("#", "");
-  if (pages.includes(p)) showPage(p); else { location.hash = "dashboard"; showPage("dashboard"); }
+  const p = currentPage();
+  if (pages.includes(p)) showPage(p); else { location.hash = "dashboard"; }
 })();
