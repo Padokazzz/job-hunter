@@ -7,13 +7,15 @@ export interface ResumeRankingProfile {
   technologies: string[];
   experienceYears: number | null;
   experienceLevel: string | null;
+  textContent?: string;
+  originalName?: string;
 }
 
 export async function getResumeRankingProfile(): Promise<ResumeRankingProfile | null> {
   const resume = await prisma.resume.findFirst({
     where: { isActive: true },
     orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-    select: { technologies: true, experience: true },
+    select: { technologies: true, experience: true, textContent: true, originalName: true },
   });
   if (resume) {
     const experience = JSON.parse(resume.experience || "{}");
@@ -21,6 +23,8 @@ export async function getResumeRankingProfile(): Promise<ResumeRankingProfile | 
       technologies: JSON.parse(resume.technologies || "[]"),
       experienceYears: experience.years ?? null,
       experienceLevel: experience.level ?? null,
+      textContent: resume.textContent,
+      originalName: resume.originalName,
     };
   }
 
@@ -40,6 +44,8 @@ export async function getResumeRankingProfile(): Promise<ResumeRankingProfile | 
     technologies: parsed.technologies,
     experienceYears: parsed.experience.years,
     experienceLevel: parsed.experience.level,
+    textContent: parsed.textContent,
+    originalName: pdfs[0]!.name,
   };
 }
 
