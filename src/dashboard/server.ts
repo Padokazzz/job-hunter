@@ -11,6 +11,8 @@ import { logger } from "../shared/logger.js";
 import { generateApplication } from "../applications/generate.js";
 import { parseResumeFromBuffer } from "../shared/resume-parser.js";
 import { detectPostingLanguage } from "../jobs/posting-language.js";
+import { analyzeTechnologyGaps } from "../jobs/technology-gaps.js";
+import { getResumeRankingProfile } from "../scoring/resume-match.js";
 import type { NormalizedJob } from "../jobs/types.js";
 import type { Job, ScoreBreakdown, Application, Prisma } from "@prisma/client";
 
@@ -140,6 +142,36 @@ const SORTABLE: Record<string, string> = {
 };
 
 const submittedApplications = { some: { appliedAt: { not: null } } } satisfies Prisma.ApplicationListRelationFilter;
+
+app.get("/api/technology-gaps", async (req, reply) => {
+  const q = req.query as { minScore?: string; days?: string };
+  const minScore = q.minScore === undefined ? 55 : Number(q.minScore);
+  const days = q.days === undefined ? 90 : Number(q.days);
+  if (![55, 70, 85].includes(minScore) || ![30, 90, 0].includes(days)) {
+    return reply.code(400).send({ error: "Selecione um período e uma aderência mínima válidos." });
+  }
+
+  const languages = allowedPostingLanguages(req.query);
+  return cached(`technology-gaps:${languages.join(",")}:${minScore}:${days}`, 60_000, async () => {
+    const profile = await getResumeRankingProfile();
+    if (!profile?.textContent?.trim()) return { resumeName: null, jobCount: 0, gaps: [] };
+
+    const jobs = await prisma.job.findMany({
+      where: {
+        unavailable: false,
+        score: { gte: minScore },
+        postingLanguage: { in: languages },
+        ...(days ? { firstSeenAt: { gte: new Date(Date.now() - days * 86_400_000) } } : {}),
+      },
+      select: { id: true, title: true, company: true, description: true, score: true },
+    });
+
+    return {
+      resumeName: profile.originalName ?? "Currículo ativo",
+      ...analyzeTechnologyGaps(profile.textContent, jobs),
+    };
+  });
+});
 
 app.get("/api/jobs", async (req, reply) => {
   const q = (req.query as Record<string, string>) ?? {};
@@ -388,7 +420,7 @@ app.post("/api/jobs/:id/action", async (req, reply) => {
     if (typeof value !== "boolean") return reply.code(400).send({ error: "Disponibilidade inválida." });
     const changed = await prisma.job.updateMany({ where: { id }, data: { unavailable: value } });
     if (!changed.count) return reply.code(404).send({ error: "Vaga não encontrada." });
-    invalidate("jobs:"); invalidate("stats");
+    invalidate("jobs:"); invalidate("stats"); invalidate("technology-gaps:");
     return { ok: true, unavailable: value };
   }
 
@@ -662,6 +694,7 @@ app.post("/api/resume/upload", async (req, reply) => {
       throw error;
     });
 
+    invalidate("technology-gaps:");
     invalidate("/api/resume");
     invalidate("/api/settings");
 
@@ -713,6 +746,7 @@ app.delete("/api/resume/:id", async (req, reply) => {
     }
   }
 
+  invalidate("technology-gaps:");
   invalidate("/api/resume");
   invalidate("/api/settings");
 
@@ -737,6 +771,7 @@ app.post("/api/resume/:id/activate", async (req, reply) => {
     data: { isActive: true },
   });
 
+  invalidate("technology-gaps:");
   invalidate("/api/resume");
   invalidate("/api/settings");
 

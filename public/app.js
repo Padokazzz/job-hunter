@@ -77,8 +77,8 @@ function toast(text, type = "") {
 }
 
 /* ============ navigation ============ */
-const pages = ["dashboard", "jobs", "sources", "reports", "applications", "settings"];
-const pageTitles = { dashboard: "Visão geral", jobs: "Vagas", sources: "Fontes", reports: "Relatórios", applications: "Candidaturas", settings: "Configuração" };
+const pages = ["dashboard", "jobs", "skills", "sources", "reports", "applications", "settings"];
+const pageTitles = { dashboard: "Visão geral", jobs: "Vagas", skills: "Tecnologias", sources: "Fontes", reports: "Relatórios", applications: "Candidaturas", settings: "Configuração" };
 
 function currentPage() { return location.hash.slice(1).split("?")[0] || "dashboard"; }
 
@@ -91,13 +91,14 @@ function showPage(name) {
     else a.removeAttribute("aria-current");
   });
   setMoreNavigation(false);
-  $("#nav-more").classList.toggle("active", ["sources", "reports", "settings"].includes(name));
+  $("#nav-more").classList.toggle("active", ["skills", "sources", "reports", "settings"].includes(name));
   $("#page-title").textContent = pageTitles[name] || name;
   if (name === "dashboard") loadDashboard();
   if (name === "jobs") {
     if ($("#filters-body").classList.contains("open")) { ensureSourcesForFilter(); ensureCompaniesForFilter(); }
     loadJobs({ reset: true });
   }
+  if (name === "skills") loadTechnologyGaps();
   if (name === "sources") loadSources();
   if (name === "reports") loadReports();
   if (name === "applications") { restoreApplicationFilters(); loadApplications(); }
@@ -153,7 +154,7 @@ includeEnglishToggle.addEventListener("change", () => {
     $("#report-detail-empty").style.display = "block";
   }
   if (currentPage() === "dashboard") $("#dash-recent").textContent = "Atualizando vagas…";
-  if (["dashboard", "jobs", "settings"].includes(currentPage())) showPage(currentPage());
+  if (["dashboard", "jobs", "skills", "settings"].includes(currentPage())) showPage(currentPage());
 });
 
 /* ============ bar list ============ */
@@ -462,6 +463,7 @@ async function setJobUnavailable(job, button) {
       body: JSON.stringify({ action: "unavailable", value: unavailable }),
     });
     invalidate("/api/jobs/recent");
+    invalidate("/api/technology-gaps");
     invalidate("/api/stats");
     if (currentJobId === job.id) closeDrawer();
     if (currentPage() === "jobs") loadJobs({ reset: true });
@@ -732,6 +734,92 @@ $("#m-save-notes").addEventListener("click", () => {
     toast("Nota salva", "ok");
   });
 });
+
+const gapFilters = $("#technology-gap-filters");
+const gapStatus = $("#technology-gap-status");
+const gapContent = $("#technology-gap-content");
+const gapPercent = new Intl.NumberFormat("pt-BR", { style: "percent", maximumFractionDigits: 1 });
+const technologyNames = {
+  aws: "AWS", gcp: "GCP", sql: "SQL", "sql server": "SQL Server", "ci/cd": "CI/CD",
+  javascript: "JavaScript", typescript: "TypeScript", "node.js": "Node.js", "next.js": "Next.js",
+  postgresql: "PostgreSQL", mysql: "MySQL", sqlite: "SQLite", mongodb: "MongoDB", graphql: "GraphQL",
+  "react native": "React Native", nestjs: "NestJS", fastapi: "FastAPI", opentelemetry: "OpenTelemetry",
+  "github actions": "GitHub Actions", "spring boot": "Spring Boot", "ruby on rails": "Ruby on Rails",
+  "c#": "C#", "c++": "C++", ".net": ".NET", html: "HTML", css: "CSS", rest: "REST",
+};
+function technologyName(technology) {
+  return technologyNames[technology] ?? technology[0].toUpperCase() + technology.slice(1);
+}
+let latestGapRequest = 0;
+
+gapFilters.addEventListener("submit", (event) => event.preventDefault());
+gapFilters.addEventListener("change", loadTechnologyGaps);
+
+async function loadTechnologyGaps() {
+  const request = ++latestGapRequest;
+  const query = new URLSearchParams(new FormData(gapFilters));
+  if (includeEnglishToggle.checked) query.set("includeEnglish", "true");
+  gapStatus.textContent = "Analisando vagas e currículo…";
+  gapContent.innerHTML = "";
+  try {
+    const { resumeName, resumeTechnologyCount, jobCount, gaps } = await cachedApi("/api/technology-gaps?" + query, 30_000);
+    if (latestGapRequest !== request || currentPage() !== "skills") return;
+    if (!resumeName) {
+      gapStatus.textContent = "Adicione um currículo em PDF para comparar com as vagas.";
+      gapContent.innerHTML = '<a class="btn-link" href="#settings">Abrir configuração do currículo</a>';
+      return;
+    }
+    gapStatus.textContent = `${resumeName} · ${jobCount} ${jobCount === 1 ? "vaga analisada" : "vagas analisadas"}`;
+    if (!jobCount || !resumeTechnologyCount || !gaps.length) {
+      const message = !jobCount ? "Nenhuma vaga atende aos filtros. Experimente ampliar o período ou reduzir a aderência mínima."
+        : !resumeTechnologyCount ? "Nenhuma tecnologia foi identificada no texto do currículo."
+        : "Nenhuma tecnologia adicional foi identificada nas vagas analisadas.";
+      gapContent.innerHTML = `<p class="panel empty">${message}</p>`;
+      return;
+    }
+
+    const visible = gaps.slice(0, 12);
+    gapContent.innerHTML = `<div class="gap-grid">
+      <section class="panel" aria-labelledby="gap-chart-heading">
+        <h3 id="gap-chart-heading">Tecnologias mais mencionadas</h3>
+        <p class="muted gap-note">Percentual das vagas analisadas que mencionam cada tecnologia. Mostrando ${visible.length} de ${gaps.length}.</p>
+        <ol class="gap-bars">${visible.map((gap, index) => `
+          <li><button type="button" class="gap-row" data-gap="${index}" aria-pressed="false">
+            <span class="gap-name">${esc(technologyName(gap.technology))}</span>
+            <span class="gap-value">${gap.jobCount} · ${gapPercent.format(gap.share)}</span>
+            <span class="gap-track" aria-hidden="true"><span style="width:${gap.share * 100}%"></span></span>
+          </button></li>`).join("")}</ol>
+      </section>
+      <section class="panel" id="gap-examples" aria-live="polite"></section>
+    </div>`;
+    const examples = $("#gap-examples");
+    const controls = $$(".gap-row", gapContent);
+    function showExamples(index) {
+      const gap = visible[index];
+      controls.forEach((control, position) => control.setAttribute("aria-pressed", String(position === index)));
+      examples.innerHTML = `<h3>Vagas que citam ${esc(technologyName(gap.technology))}</h3>
+        <p class="muted gap-note">Exemplos de maior aderência. Uma menção pode ser requisito ou diferencial.</p>
+        <ul class="gap-example-list">${gap.examples.map((job) => `
+          <li><button type="button" data-job-id="${esc(job.id)}">
+            <strong>${esc(job.title)}</strong><small>${esc(job.company)} · Aderência ${job.score}</small>
+          </button></li>`).join("")}</ul>`;
+    }
+    controls.forEach((control, index) => control.addEventListener("click", () => showExamples(index)));
+    examples.addEventListener("click", (event) => {
+      const button = event.target.closest("[data-job-id]");
+      if (button) openJobDrawer({ id: button.dataset.jobId });
+    });
+    showExamples(0);
+  } catch (error) {
+    if (latestGapRequest !== request || currentPage() !== "skills") return;
+    gapStatus.textContent = "Falha ao analisar as vagas. " + error.message;
+    const retry = document.createElement("button");
+    retry.type = "button";
+    retry.textContent = "Tentar novamente";
+    retry.addEventListener("click", loadTechnologyGaps);
+    gapContent.append(retry);
+  }
+}
 
 /* ============ SOURCES ============ */
 async function loadSources() {
@@ -1128,6 +1216,7 @@ async function uploadResume(file) {
     }
 
     toast("Currículo enviado com sucesso!", "ok");
+    invalidate("/api/technology-gaps");
     invalidate("/api/resume");
     invalidate("/api/settings");
     loadSettings();
@@ -1141,6 +1230,7 @@ async function activateResume(id) {
   try {
     await api(`/api/resume/${id}/activate`, { method: "POST" });
     toast("Currículo ativado", "ok");
+    invalidate("/api/technology-gaps");
     invalidate("/api/resume");
     invalidate("/api/settings");
     loadSettings();
@@ -1154,6 +1244,7 @@ async function deleteResume(id) {
   try {
     await api(`/api/resume/${id}`, { method: "DELETE" });
     toast("Currículo excluído", "ok");
+    invalidate("/api/technology-gaps");
     invalidate("/api/resume");
     invalidate("/api/settings");
     loadSettings();
@@ -1164,7 +1255,7 @@ async function deleteResume(id) {
 
 /* ============ refresh / auto-refresh ============ */
 $("#btn-refresh").addEventListener("click", () => {
-  invalidate("/api/stats"); invalidate("/api/sources"); invalidate("/api/reports"); invalidate("/api/applications");
+  invalidate("/api/technology-gaps"); invalidate("/api/stats"); invalidate("/api/sources"); invalidate("/api/reports"); invalidate("/api/applications");
   const p = currentPage();
   showPage(p);
   const b = $("#btn-refresh");

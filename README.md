@@ -108,6 +108,12 @@ As categorias e pesos são regras de triagem definidas no projeto, não uma aval
 - **Candidaturas.** Filtre por vaga, empresa, etapa ou data de envio. Atualize a etapa e registre o próximo passo e seu prazo na tabela. A ordenação padrão prioriza os prazos mais próximos.
 - **Celular.** A navegação principal fica na barra inferior, e as listas de vagas e candidaturas aparecem em cartões com suas ações.
 
+### Tecnologias para desenvolver
+
+Em **Tecnologias**, compare o currículo ativo com as vagas disponíveis que atingem a aderência mínima escolhida. O gráfico mostra quantas vagas mencionam cada tecnologia que o sistema ainda não identificou no PDF e a proporção sobre todas as vagas analisadas.
+
+O recorte inicial usa vagas encontradas nos últimos 90 dias com aderência de pelo menos 55 pontos e respeita o filtro de idioma do painel. Ao selecionar uma barra, você vê até três anúncios de exemplo, priorizados pela aderência. Uma menção pode ser requisito ou diferencial, e a leitura automática pode deixar de reconhecer grafias fora do catálogo.
+
 ### Ranking por currículo
 
 O ranking usa o PDF ativo em **Configuração**. Sem currículo ativo no banco, o coletor lê o único PDF em `curriculo/`, uma pasta ignorada pelo Git e montada em modo somente leitura no coletor Docker. A correspondência entre as tecnologias detectadas vale até 70 dos 100 pontos.

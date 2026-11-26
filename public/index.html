@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Job Hunter</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💼</text></svg>" />
-  <link rel="stylesheet" href="/styles.css?v=coluna-acoes" />
+  <link rel="stylesheet" href="/styles.css?v=lacunas-tecnologias" />
 </head>
 <body>
   <div class="app">
@@ -18,6 +18,7 @@
         <a href="#dashboard" data-page="dashboard" class="nav-item active" aria-current="page"><span class="ico" aria-hidden="true">▦</span><span>Visão geral</span><span class="badge" id="nav-dash" hidden></span></a>
         <a href="#jobs" data-page="jobs" class="nav-item"><span class="ico" aria-hidden="true">⌕</span><span>Vagas</span><span class="badge" id="nav-jobs" hidden></span></a>
         <a href="#applications" data-page="applications" class="nav-item"><span class="ico" aria-hidden="true">▤</span><span>Candidaturas</span></a>
+        <a href="#skills" data-page="skills" class="nav-item nav-secondary"><span class="ico" aria-hidden="true">◫</span><span>Tecnologias</span></a>
         <a href="#sources" data-page="sources" class="nav-item nav-secondary"><span class="ico" aria-hidden="true">◎</span><span>Fontes</span></a>
         <a href="#reports" data-page="reports" class="nav-item nav-secondary"><span class="ico" aria-hidden="true">▥</span><span>Relatórios</span></a>
         <a href="#settings" data-page="settings" class="nav-item nav-secondary"><span class="ico" aria-hidden="true">⚙︎</span><span>Configuração</span></a>
@@ -67,6 +68,11 @@
             </section>
             <div class="dashboard-insights">
               <section class="panel"><h3>Aderência das vagas</h3><div id="dash-class"></div></section>
+              <section class="panel gap-entry">
+                <h3>Lacunas no currículo</h3>
+                <p>Veja quais tecnologias aparecem nas vagas aderentes e ainda não constam no PDF.</p>
+                <a class="btn-link" href="#skills">Ver gráfico de tecnologias</a>
+              </section>
               <details class="panel insights-details">
                 <summary>Análise de vagas</summary>
                 <h3>Etapas</h3><div id="dash-status"></div>
@@ -157,6 +163,28 @@
             </div>
             <div class="empty" id="jobs-empty" style="display:none">Nenhuma vaga encontrada.</div>
           </div>
+        </section>
+
+        <section class="page" id="page-skills">
+          <div class="panel">
+            <div class="panel-heading">
+              <div><h3>Lacunas no currículo</h3><p>Tecnologias mencionadas em vagas aderentes que não foram identificadas no PDF.</p></div>
+            </div>
+            <form id="technology-gap-filters" class="gap-filters">
+              <label>Aderência mínima <select name="minScore">
+                <option value="55">55 · Secundárias ou melhores</option>
+                <option value="70">70 · Boas ou prioritárias</option>
+                <option value="85">85 · Prioritárias</option>
+              </select></label>
+              <label>Vagas encontradas <select name="days">
+                <option value="90">Últimos 90 dias</option>
+                <option value="30">Últimos 30 dias</option>
+                <option value="0">Todo o histórico</option>
+              </select></label>
+            </form>
+          </div>
+          <p id="technology-gap-status" role="status" class="gap-status"></p>
+          <div id="technology-gap-content"></div>
         </section>
 
         <!-- SOURCES -->
@@ -303,6 +331,6 @@
 
   <div class="toasts" id="toasts" role="status" aria-live="polite"></div>
 
-  <script type="module" src="/app.js?v=coluna-acoes"></script>
+  <script type="module" src="/app.js?v=lacunas-tecnologias"></script>
 </body>
 </html>

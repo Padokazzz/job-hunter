@@ -53,7 +53,7 @@ const TECH_DICT: Array<[string, RegExp]> = [
   ["kubernetes", /\bkubernetes\b|\bk8s\b/i],
 ];
 
-function detectTechs(text: string): string[] {
+export function detectTechs(text: string): string[] {
   const found = new Set<string>();
   for (const [name, re] of TECH_DICT) {
     if (re.test(text)) found.add(name);
