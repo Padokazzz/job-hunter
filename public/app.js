@@ -20,13 +20,20 @@ async function api(path, opts = {}) {
 }
 
 const apiCache = new Map();
-async function cachedApi(path, ttlMs = 10000) {
-  const now = Date.now();
+function cachedApi(path, ttlMs = 10000) {
   const hit = apiCache.get(path);
-  if (hit && now - hit.ts < ttlMs) return hit.data;
-  const data = await api(path);
-  apiCache.set(path, { ts: now, data });
-  return data;
+  if (hit && (hit.pending || Date.now() - hit.ts < ttlMs)) return hit.promise;
+  const entry = { pending: true, ts: 0, promise: null };
+  entry.promise = api(path).then((data) => {
+    entry.ts = Date.now();
+    entry.pending = false;
+    return data;
+  }, (error) => {
+    if (apiCache.get(path) === entry) apiCache.delete(path);
+    throw error;
+  });
+  apiCache.set(path, entry);
+  return entry.promise;
 }
 function invalidate(prefix) { for (const k of apiCache.keys()) if (k.startsWith(prefix)) apiCache.delete(k); }
 
@@ -40,17 +47,13 @@ function fmtDate(s) {
   if (isNaN(d)) return esc(s);
   return d.toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", year: "2-digit", hour: "2-digit", minute: "2-digit" });
 }
-function classTag(c) { return `<span class="tag ${esc(c || "")}">${esc(c || "")}</span>`; }
-function statusTag(s) { return `<span class="status-badge status-${esc(s || "")}">${esc(s || "")}</span>`; }
+const classificationLabels = { PRIORITARY: "Prioritária", GOOD: "Boa", SECONDARY: "Secundária", LOW: "Baixa", DISCARD: "Descartada" };
+const workLabels = { REMOTE: "Remoto", HYBRID: "Híbrido", ONSITE: "Presencial", UNKNOWN: "Não informado" };
+const seniorityLabels = { JUNIOR: "Júnior", JUNIOR_PLENO: "Júnior / Pleno", PLENO: "Pleno", SENIOR: "Sênior", UNKNOWN: "Não informada" };
+function classTag(c) { return `<span class="tag ${esc(c || "")}">${esc(classificationLabels[c] || c || "—")}</span>`; }
+function statusLabel(s) { return stageLabels[s] || ({ NEW: "Nova", REVIEWING: "Em análise", APPROVED: "Aprovada" })[s] || s || "—"; }
+function statusTag(s) { return `<span class="status-badge status-${esc(s || "")}">${esc(statusLabel(s))}</span>`; }
 function scoreClass(s) { return s >= 70 ? "score-hi" : s >= 45 ? "score-mid" : "score-lo"; }
-function fmtSalary(min, max, cur) {
-  // Ignora salários 0 ou nulos
-  if ((!min && !max) || (min === 0 && max === 0)) return null;
-  const c = cur || "BRL";
-  const f = (n) => (n != null ? Number(n).toLocaleString("pt-BR") : "?");
-  if (min && max) return `${f(min)}–${f(max)} ${c}`;
-  return `${f(min || max)} ${c}`;
-}
 function techList(j) {
   const raw = typeof j.technologies === "string" ? j.technologies : (j.technologies || []).join(",");
   return raw ? raw.split(",").map((s) => s.trim()).filter(Boolean) : [];
@@ -75,16 +78,26 @@ function toast(text, type = "") {
 
 /* ============ navigation ============ */
 const pages = ["dashboard", "jobs", "sources", "reports", "applications", "settings"];
-const pageTitles = { dashboard: "Dashboard", jobs: "Vagas", sources: "Fontes", reports: "Relatórios", applications: "Candidaturas", settings: "Configuração" };
+const pageTitles = { dashboard: "Visão geral", jobs: "Vagas", sources: "Fontes", reports: "Relatórios", applications: "Candidaturas", settings: "Configuração" };
 
 function currentPage() { return location.hash.slice(1).split("?")[0] || "dashboard"; }
 
 function showPage(name) {
   pages.forEach((p) => $("#page-" + p).classList.toggle("active", p === name));
-  $$("#nav a").forEach((a) => a.classList.toggle("active", a.dataset.page === name));
+  $$("#nav a").forEach((a) => {
+    const active = a.dataset.page === name;
+    a.classList.toggle("active", active);
+    if (active) a.setAttribute("aria-current", "page");
+    else a.removeAttribute("aria-current");
+  });
+  setMoreNavigation(false);
+  $("#nav-more").classList.toggle("active", ["sources", "reports", "settings"].includes(name));
   $("#page-title").textContent = pageTitles[name] || name;
   if (name === "dashboard") loadDashboard();
-  if (name === "jobs") { ensureSourcesForFilter(); ensureCompaniesForFilter(); loadJobs({ reset: true }); }
+  if (name === "jobs") {
+    if ($("#filters-body").classList.contains("open")) { ensureSourcesForFilter(); ensureCompaniesForFilter(); }
+    loadJobs({ reset: true });
+  }
   if (name === "sources") loadSources();
   if (name === "reports") loadReports();
   if (name === "applications") { restoreApplicationFilters(); loadApplications(); }
@@ -92,12 +105,32 @@ function showPage(name) {
 }
 $$("#nav a").forEach((a) => a.addEventListener("click", (e) => {
   e.preventDefault();
+  setMoreNavigation(false);
   location.hash = a.dataset.page;
-
 }));
 window.addEventListener("hashchange", () => {
   const p = currentPage();
-  if (pages.includes(p)) showPage(p);
+  if (pages.includes(p)) {
+    const previous = $("#nav [aria-current='page']")?.dataset.page;
+    showPage(p);
+    if (previous !== p) window.scrollTo(0, 0);
+  }
+});
+
+function setMoreNavigation(open) {
+  $("#nav").classList.toggle("is-open", open);
+  $("#nav-more").setAttribute("aria-expanded", String(open));
+}
+
+$("#nav-more").addEventListener("click", () => setMoreNavigation($("#nav-more").getAttribute("aria-expanded") !== "true"));
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") {
+    if ($("#drawer").classList.contains("active") && !$("#application-editor").open) closeDrawer();
+    if ($("#nav-more").getAttribute("aria-expanded") === "true") {
+      setMoreNavigation(false);
+      $("#nav-more").focus();
+    }
+  }
 });
 
 const includeEnglishToggle = $("#include-english");
@@ -146,41 +179,35 @@ async function loadDashboard() {
       cachedApi(postingLanguagePath("/api/jobs/recent"), 30000).catch(() => []),
     ]);
     if (includeEnglish !== includeEnglishToggle.checked || currentPage() !== "dashboard") return;
-    $("#dbmode-text").textContent = "DB: " + (s.dbMode || "—");
+    $("#dbmode-text").textContent = s.dbMode === "supabase" ? "PostgreSQL conectado" : "Banco conectado";
     $("#nav-dash").textContent = s.total;
     $("#nav-jobs").textContent = s.byStatus?.NEW != null ? s.byStatus.NEW : "·";
+    const number = new Intl.NumberFormat("pt-BR");
     const cards = [
-      { label: "Total de vagas", value: s.total, hint: "nos idiomas selecionados" },
-      { label: "Favoritadas", value: s.favorited, hint: "★" },
-      { label: "Candidaturas", value: s.applied, hint: "enviadas/aprovadas" },
-      { label: "Relevantes (GOOD+)", value: (s.byClassification?.GOOD || 0) + (s.byClassification?.PRIORITARY || 0), hint: "aderência alta" },
+      { label: "Vagas no painel", value: s.total, subtitle: "Nos idiomas selecionados", icon: "⌕", page: "jobs" },
+      { label: "Alta aderência", value: (s.byClassification?.GOOD || 0) + (s.byClassification?.PRIORITARY || 0), subtitle: "Classificadas como boas ou prioritárias", icon: "◎" },
+      { label: "Candidaturas", value: s.applied, subtitle: "Registros no acompanhamento", icon: "▤", page: "applications" },
+      { label: "Favoritas", value: s.favorited, subtitle: "Vagas que você marcou", icon: "☆" },
     ];
-    $("#dash-cards").innerHTML = cards.map((c) =>
-      `<div class="card"><div class="label">${c.label}</div><div class="value">${c.value}</div><div class="hint">${c.hint}</div></div>`).join("");
-    barList("dash-class", s.byClassification);
-    barList("dash-status", s.byStatus);
+    $("#dash-cards").innerHTML = cards.map((card) => {
+      const content = `<div class="metric-heading"><span class="metric-icon" aria-hidden="true">${card.icon}</span><span class="label">${card.label}</span></div><div class="value">${number.format(card.value)}</div><div class="hint">${card.subtitle}</div>`;
+      return card.page ? `<a class="card card-link" href="#${card.page}">${content}</a>` : `<div class="card">${content}</div>`;
+    }).join("");
+    barList("dash-class", Object.fromEntries(Object.entries(s.byClassification || {}).map(([key, count]) => [classificationLabels[key] || key, count])));
+    barList("dash-status", Object.fromEntries(Object.entries(s.byStatus || {}).map(([key, count]) => [statusLabel(key), count])));
     barList("dash-source", s.bySource);
     barList("dash-companies", Object.fromEntries((s.topCompanies || []).map((c) => [c.company, c.count])));
 
-    // Vagas recentes
     const recentEl = $("#dash-recent");
     if (!recentJobs.length) {
-      recentEl.innerHTML = '<div class="muted">Nenhuma vaga encontrada ainda.</div>';
+      recentEl.innerHTML = '<p class="empty">Nenhuma recomendação para os idiomas selecionados.</p>';
     } else {
-      recentEl.innerHTML = `<table style="width:100%"><thead><tr><th>Título</th><th>Empresa</th><th>Score</th><th>Classificação</th><th>Data</th><th></th></tr></thead><tbody>
-        ${recentJobs.map((j) => {
-          const salary = fmtSalary(j.salaryMin, j.salaryMax, j.currency);
-          return `<tr>
-            <td class="title-cell">${esc(j.title || "")}<div class="company">${esc(j.location || "")}${salary ? ` · <span class="salary">${salary}</span>` : ""}</div></td>
-            <td>${esc(j.company || "")}</td>
-            <td><span class="score-badge ${scoreClass(j.score)}">${j.score != null ? j.score : ""}</span></td>
-            <td>${classTag(j.classification)}</td>
-            <td>${fmtDate(j.firstSeenAt)}</td>
-            <td><a href="${esc(j.url || "#")}" target="_blank" rel="noopener" class="btn-link" title="Abrir vaga">↗</a></td>
-          </tr>`;
-        }).join("")}
-        </tbody></table>
-        <div style="text-align:center;margin-top:12px"><a href="#jobs" class="btn-link">Ver todas as vagas →</a></div>`;
+      recentEl.innerHTML = `<div class="recommendation-list">${recentJobs.slice(0, 6).map((job) => `
+        <button type="button" class="recommendation" data-recommended-job="${esc(job.id)}">
+          <span class="company-mark" aria-hidden="true">${esc((job.company || job.title || "?").trim().slice(0, 1).toUpperCase())}</span>
+          <span class="recommendation-copy"><strong>${esc(job.title)}</strong><small>${esc([job.company, job.location].filter(Boolean).join(" · "))}</small></span>
+          <span class="recommendation-score"><span class="score-badge ${scoreClass(job.score)}">${job.score}</span><small>aderência</small></span>
+        </button>`).join("")}</div>`;
     }
 
     hideMsg();
@@ -188,6 +215,11 @@ async function loadDashboard() {
     showMsg("Falha ao carregar dashboard: " + e.message);
   }
 }
+
+$("#dash-recent").addEventListener("click", (event) => {
+  const button = event.target.closest("[data-recommended-job]");
+  if (button) openJobDrawer({ id: button.dataset.recommendedJob });
+});
 
 /* ============ JOBS (com cache de cliente + lazy loading) ============ */
 const jobsState = {
@@ -240,12 +272,16 @@ function readFilters() {
   if (v("#f-search")) f.search = v("#f-search");
   if (v("#global-search") && !f.search) f.search = v("#global-search");
   if ($("#f-fav")?.checked) f.favorited = "true";
+  if ($("#f-include-submitted").checked) f.application = "all";
+  if ($("#f-unavailable").checked) f.availability = "unavailable";
   return f;
 }
 
 function clearAllFilters() {
   [...FILTER_IDS, "#global-search"].forEach((id) => { const el = $(id); if (el) el.value = ""; });
   const fav = $("#f-fav"); if (fav) fav.checked = false;
+  $("#f-include-submitted").checked = false;
+  $("#f-unavailable").checked = false;
   clearChips();
   updateFilterCount();
   loadJobs({ reset: true });
@@ -277,13 +313,15 @@ const filtersBody = $("#filters-body");
 const filtersArrow = $("#filters-arrow");
 if (filtersToggle) {
   filtersToggle.addEventListener("click", () => {
-    filtersBody?.classList.toggle("open");
+    const open = filtersBody.classList.toggle("open");
+    filtersToggle.setAttribute("aria-expanded", String(open));
+    if (open) { ensureSourcesForFilter(); ensureCompaniesForFilter(); }
     filtersArrow?.classList.toggle("open");
   });
 }
 
 // Busca automática ao interagir com qualquer filtro
-[...FILTER_IDS, "#f-fav"].forEach((id) => {
+[...FILTER_IDS, "#f-fav", "#f-include-submitted", "#f-unavailable"].forEach((id) => {
   const el = $(id);
   if (!el) return;
   const isInstant = el.tagName === "SELECT" || el.type === "checkbox";
@@ -301,23 +339,23 @@ $("#btn-loadmore")?.addEventListener("click", () => loadJobs({}));
 
 /* quick chips */
 function clearChips() {
-  $$("#quick-chips .chip").forEach((c) => c.classList.remove("active"));
+  $$("#quick-chips [data-q]").forEach((c) => { c.classList.remove("active"); c.setAttribute("aria-pressed", "false"); });
   const fav = $("#f-fav"); if (fav) fav.checked = false;
   const status = $("#f-status"); if (status) status.value = "";
   const workModel = $("#f-workModel"); if (workModel) workModel.value = "";
 }
 function syncChipState() {
   const f = jobsState.filters;
-  $$("#quick-chips .chip").forEach((c) => {
+  $$("#quick-chips [data-q]").forEach((c) => {
     const q = c.dataset.q;
     const on = (q === "fav" && f.favorited === "true") ||
       (q === "new" && f.status === "NEW") ||
-      (q === "applied" && f.status === "APPLIED") ||
       (q === "remote" && f.workModel === "REMOTE");
     c.classList.toggle("active", on);
+    c.setAttribute("aria-pressed", String(on));
   });
 }
-$$("#quick-chips .chip").forEach((chip) => chip.addEventListener("click", () => {
+$$("#quick-chips [data-q]").forEach((chip) => chip.addEventListener("click", () => {
   const q = chip.dataset.q;
   const active = chip.classList.contains("active");
 
@@ -331,7 +369,6 @@ $$("#quick-chips .chip").forEach((chip) => chip.addEventListener("click", () => 
   if (!active) {
     if (q === "fav" && fav) fav.checked = true;
     if (q === "new" && status) status.value = "NEW";
-    if (q === "applied" && status) status.value = "APPLIED";
     if (q === "remote" && workModel) workModel.value = "REMOTE";
   }
 
@@ -343,22 +380,26 @@ $$("#quick-chips .chip").forEach((chip) => chip.addEventListener("click", () => 
 }));
 
 /* global search */
-$("#global-search")?.addEventListener("input", debounce(() => {
-  const el = $("#f-search"); if (el) el.value = $("#global-search").value;
-  if (location.hash.replace("#", "") !== "jobs") { location.hash = "jobs"; }
-  else loadJobs({ reset: true });
-}, 400));
+const refreshJobSearch = debounce(() => {
+  if (currentPage() === "jobs") loadJobs({ reset: true });
+}, 300);
+$("#global-search").addEventListener("input", (event) => {
+  $("#f-search").value = event.target.value;
+  if (currentPage() === "jobs") refreshJobSearch();
+  else location.hash = "jobs";
+});
 
 function debounce(fn, ms) {
   let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); };
 }
 
-function renderJobs() {
+function renderJobs(start = 0) {
   const body = $("#jobs-body");
   const empty = $("#jobs-empty");
   if (!jobsState.items.length) { body.innerHTML = ""; empty.style.display = "block"; return; }
   empty.style.display = "none";
-  body.innerHTML = jobsState.items.map((j, idx) => {
+  const html = jobsState.items.slice(start).map((j, index) => {
+    const idx = start + index;
     const techs = techList(j);
     const shown = techs.slice(0, 5);
     const extra = techs.length - shown.length;
@@ -367,38 +408,71 @@ function renderJobs() {
     return `
     <tr data-idx="${idx}">
       <td class="title-cell">
-        ${j.url ? `<a href="${esc(j.url)}" target="_blank" rel="noopener" class="job-link" title="Abrir vaga em nova aba">${esc(j.title || "")} ↗</a>` : esc(j.title || "")}
-        <div class="company">${esc(j.location || "—")}</div>
+        ${j.url ? `<a href="${esc(j.url)}" target="_blank" rel="noopener" class="job-link" title="Abrir vaga em nova aba">${esc(j.title || "")}</a>` : esc(j.title || "")}
+        <div class="company"><span class="mobile-company">${esc(j.company || "")} · </span>${esc(j.location || "—")}</div>
+        <div class="job-compact-meta">
+          ${classTag(j.classification)}
+          <span class="muted">${esc([workLabels[j.workModel], seniorityLabels[j.seniority]].filter(Boolean).join(" · "))}</span>
+        </div>
         <div class="stack-pills">${pills || '<span class="muted" style="font-size:11px">sem stack</span>'}</div>
       </td>
       <td>${esc(j.company || "")}</td>
-      <td><span class="score-badge ${scoreClass(j.score)}">${j.score != null ? j.score : ""}</span></td>
-      <td>${classTag(j.classification)}</td>
-      <td>${statusTag(j.status)}</td>
-      <td>${esc(j.workModel || "")}</td>
-      <td>${esc(j.seniority || "")}</td>
+      <td data-label="Aderência"><span class="score-badge ${scoreClass(j.score)}">${j.score != null ? j.score : ""}</span></td>
+      <td data-label="Classificação">${classTag(j.classification)}</td>
+      <td data-label="Etapa">${j.unavailable ? '<div class="muted">Anúncio indisponível</div>' : ""}${j.submittedAt ? `<span class="muted">Já enviada · ${fmtCalendarDate(j.submittedAt)}</span>` : statusTag(j.status)}</td>
+      <td data-label="Modelo">${esc(workLabels[j.workModel] || j.workModel)}</td>
+      <td data-label="Senioridade">${esc(seniorityLabels[j.seniority] || j.seniority)}</td>
       <td>
         <div class="row-actions">
-          <span class="star ${j.favorited ? "" : "off"}" data-act="fav" title="Favoritar">${j.favorited ? "★" : "☆"}</span>
-          <button data-act="open" title="Abrir detalhes">🔍</button>
+          <button type="button" data-act="submission">${j.submittedAt ? "Acompanhar" : "Já me candidatei"}</button>
+          <button type="button" class="star ${j.favorited ? "" : "off"}" data-act="fav" aria-label="Favorita" aria-pressed="${Boolean(j.favorited)}">${j.favorited ? "★" : "☆"}</button>
+          <button type="button" data-act="open">Detalhes</button>
+          <button type="button" data-act="availability">${j.unavailable ? "Restaurar vaga" : "Marcar inválida"}</button>
         </div>
       </td>
     </tr>`;
   }).join("");
-  $$("#jobs-body tr").forEach((tr) => {
-    tr.addEventListener("click", (e) => {
-      // Se clicou no link da vaga, deixa abrir normalmente
-      const link = e.target.closest("a");
-      if (link && link.classList.contains("job-link")) {
-        e.stopPropagation();
-        return; // deixa o browser navegar
-      }
+  if (start) body.insertAdjacentHTML("beforeend", html);
+  else body.innerHTML = html;
+}
 
-      const act = e.target.closest("[data-act]");
-      if (act && act.dataset.act === "fav") { e.stopPropagation(); toggleFavQuick(jobsState.items[Number(tr.dataset.idx)], tr); return; }
-      openJobDrawer(jobsState.items[Number(tr.dataset.idx)]);
+$("#jobs-body").addEventListener("click", (event) => {
+  const row = event.target.closest("tr[data-idx]");
+  if (!row || event.target.closest("a")) return;
+  const job = jobsState.items[Number(row.dataset.idx)];
+  const action = event.target.closest("[data-act]")?.dataset.act;
+  if (action === "fav") {
+    toggleFavQuick(job, row);
+  } else if (action === "availability") {
+    setJobUnavailable(job, event.target.closest("button"));
+  } else if (action === "submission") {
+    if (job.submittedAt) showSubmittedApplications(job.submittedApplicationId);
+    else openApplicationEditor("submit", job);
+  } else {
+    openJobDrawer(job);
+  }
+});
+
+async function setJobUnavailable(job, button) {
+  button.disabled = true;
+  const unavailable = !job.unavailable;
+  try {
+    await api("/api/jobs/" + encodeURIComponent(job.id) + "/action", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "unavailable", value: unavailable }),
     });
-  });
+    invalidate("/api/jobs/recent");
+    invalidate("/api/stats");
+    if (currentJobId === job.id) closeDrawer();
+    if (currentPage() === "jobs") loadJobs({ reset: true });
+    else if (currentPage() === "dashboard") loadDashboard();
+    else if (currentPage() === "applications") loadApplications(applicationsOffset);
+    toast(unavailable ? "Vaga marcada como indisponível" : "Vaga restaurada", "ok");
+  } catch (error) {
+    toast("Falha ao atualizar a vaga: " + error.message, "error");
+  } finally {
+    button.disabled = false;
+  }
 }
 
 function updateLoadMore() {
@@ -433,7 +507,7 @@ async function loadJobs({ reset = false } = {}) {
     else jobsState.items = jobsState.items.concat(items);
     jobsState.total = data.total;
     jobsState.offset = sentOffset + items.length;
-    renderJobs();
+    renderJobs(sentOffset);
     $("#btn-loadmore").hidden = false;
     updateLoadMore();
     const shown = jobsState.items.length;
@@ -453,11 +527,27 @@ async function loadJobs({ reset = false } = {}) {
   }
 }
 
+$("#jobs-sort").addEventListener("change", (event) => {
+  const [key, direction] = event.target.value.split(":");
+  setSort(key, direction);
+});
+
 $("#jobs-retry").addEventListener("click", () => loadJobs({ reset: jobsState.offset === 0 }));
 
-function setSort(key) {
-  if (jobsState.sortKey === key) jobsState.sortDir = jobsState.sortDir === "asc" ? "desc" : "asc";
+function setSort(key, direction) {
+  if (direction) { jobsState.sortKey = key; jobsState.sortDir = direction; }
+  else if (jobsState.sortKey === key) jobsState.sortDir = jobsState.sortDir === "asc" ? "desc" : "asc";
   else { jobsState.sortKey = key; jobsState.sortDir = "desc"; }
+  const sortSelect = $("#jobs-sort");
+  sortSelect.querySelector("[data-current-sort]")?.remove();
+  const activeSort = jobsState.sortKey + ":" + jobsState.sortDir;
+  if (![...sortSelect.options].some((option) => option.value === activeSort)) {
+    const name = $(`#jobs-table th[data-sort="${key}"]`)?.textContent.replace(/[▼▲]/g, "").trim() || key;
+    const option = new Option(name + (jobsState.sortDir === "asc" ? " (crescente)" : " (decrescente)"), activeSort);
+    option.dataset.currentSort = "";
+    sortSelect.add(option);
+  }
+  sortSelect.value = activeSort;
   $$("#jobs-table th[data-sort]").forEach((th) => {
     const active = th.dataset.sort === key;
     th.classList.toggle("sorted", active);
@@ -472,10 +562,14 @@ $$("#jobs-table th[data-sort]").forEach((th) => th.addEventListener("click", () 
 /* ============ JOB DRAWER ============ */
 let currentJobId = null;
 let drawerRequest;
+let drawerOpener;
 
 function openJobDrawer(job) {
+  if (!$("#drawer").classList.contains("active")) drawerOpener = document.activeElement;
   currentJobId = job.id;
   $("#drawer").classList.add("active");
+  $(".app").inert = true;
+  $("#drawer-close").focus();
   $("#m-title").textContent = "Carregando…";
   $("#m-sub").textContent = "";
   $("#drawer .drawer-body").hidden = true;
@@ -499,6 +593,9 @@ function closeDrawer() {
   drawerRequest = undefined;
   currentJobId = null;
   $("#drawer").classList.remove("active");
+  $(".app").inert = false;
+  if (drawerOpener?.isConnected) drawerOpener.focus();
+  drawerOpener = undefined;
 }
 $("#drawer-close").addEventListener("click", closeDrawer);
 $("#drawer").addEventListener("click", (e) => { if (e.target === $("#drawer")) closeDrawer(); });
@@ -520,6 +617,18 @@ function renderDrawer(j) {
   $("#m-notes").value = j.notes || "";
   $("#m-notes-msg").textContent = "";
   updateDrawerButtons(j);
+  const availability = $("#m-unavailable");
+  availability.textContent = j.unavailable ? "Restaurar vaga" : "Marcar inválida";
+  availability.onclick = () => setJobUnavailable(j, availability);
+  $("#m-applied").textContent = j.submittedAt ? "Acompanhar candidatura" : "Já me candidatei";
+  $("#m-applied").onclick = () => {
+    if (j.submittedAt) {
+      closeDrawer();
+      showSubmittedApplications(j.submittedApplicationId);
+    } else {
+      openApplicationEditor("submit", j);
+    }
+  };
   renderApplication(j);
 }
 
@@ -542,7 +651,7 @@ function renderApplication(j) {
     <h5 class="app-h">Carta de apresentação</h5><pre class="app-text">${esc(app.coverLetter || "")}</pre>
     <h5 class="app-h">Pontos fortes</h5>${highlightsHtml}
     <h5 class="app-h">Respostas sugeridas</h5><ul class="reasons">${answersHtml}</ul>`;
-  $("#m-applied").disabled = app.status !== "APPLICATION_READY";
+
 }
 
 function updateDrawerButtons(j) {
@@ -594,7 +703,7 @@ async function toggleFavQuick(job, tr) {
   if (!job) return;
   const star = tr.querySelector(".star");
   const newVal = !job.favorited;
-  if (star) { star.classList.toggle("off", !newVal); star.textContent = newVal ? "★" : "☆"; }
+  if (star) { star.classList.toggle("off", !newVal); star.setAttribute("aria-pressed", String(newVal)); star.textContent = newVal ? "★" : "☆"; }
   job.favorited = newVal;
   try {
     await api("/api/jobs/" + encodeURIComponent(job.id) + "/action", {
@@ -603,7 +712,7 @@ async function toggleFavQuick(job, tr) {
     invalidate("/api/stats");
   } catch (e) {
     job.favorited = !newVal;
-    if (star) { star.classList.toggle("off", newVal); star.textContent = newVal ? "☆" : "★"; }
+    if (star) { star.classList.toggle("off", newVal); star.setAttribute("aria-pressed", String(!newVal)); star.textContent = newVal ? "☆" : "★"; }
     toast("Falha ao favoritar", "error");
   }
 }
@@ -613,7 +722,7 @@ $("#m-view").addEventListener("click", () => jobAction("view"));
 $("#m-approve").addEventListener("click", () => jobAction("approve"));
 $("#m-ignore").addEventListener("click", () => jobAction("ignore"));
 $("#m-prepare").addEventListener("click", () => jobAction("prepare"));
-$("#m-applied").addEventListener("click", () => jobAction("applied", currentJobId ? jobsState.items.find((x) => x.id === currentJobId)?.url : undefined));
+
 $("#m-save-notes").addEventListener("click", () => {
   const v = $("#m-notes").value;
   const jobId = currentJobId;
@@ -700,7 +809,11 @@ function stageOptions(selected) {
 applicationsForm.elements.stage.insertAdjacentHTML("beforeend", stageOptions());
 function restoreApplicationFilters() {
   const query = new URLSearchParams(location.hash.split("?")[1]);
-  for (const field of ["search", "stage", "since", "until"]) applicationsForm.elements[field].value = query.get(field) || "";
+  applicationsForm.reset();
+  for (const field of ["id", "search", "stage", "since", "until", "submitted", "sort"]) {
+    if (query.has(field)) applicationsForm.elements[field].value = query.get(field);
+  }
+  applicationsForm.querySelector("details").open = ["since", "until", "sort"].some((field) => query.has(field)) || (query.has("submitted") && !query.has("id"));
 }
 
 function applyApplicationFilters() {
@@ -713,13 +826,14 @@ function applyApplicationFilters() {
 function applicationQuery() {
   const query = new URLSearchParams();
   for (const [field, value] of new FormData(applicationsForm)) {
-    if (value.trim()) query.set(field, value.trim());
+    if (value.trim() && !(field === "sort" && value === "followUp")) query.set(field, value.trim());
   }
   return query;
 }
 
 applicationsForm.addEventListener("submit", (event) => {
   event.preventDefault();
+  applicationsForm.elements.id.value = "";
   applyApplicationFilters();
 });
 $("#apps-clear").addEventListener("click", () => {
@@ -745,6 +859,7 @@ async function loadApplications(offset = 0) {
     query.set(field + "Offset", date.getTimezoneOffset());
   }
   query.set("offset", offset);
+  query.set("sort", applicationsForm.elements.sort.value || "followUp");
   const count = $("#apps-count");
   const body = $("#apps-body");
   count.textContent = "Carregando candidaturas…";
@@ -761,14 +876,17 @@ async function loadApplications(offset = 0) {
     $("#apps-empty").textContent = hasFilters ? "Nenhuma candidatura corresponde aos filtros." : "Nenhuma candidatura cadastrada.";
     body.innerHTML = items.map((a, index) => `
       <tr data-index="${index}">
-        <td><button type="button" data-open>${esc(a.jobTitle)}</button></td><td>${esc(a.company)}</td>
-        <td><select aria-label="Etapa para ${esc(a.jobTitle)}">${stageOptions(a.status)}</select></td>
-        <td>${fmtDate(a.appliedAt)}</td>
-        <td>${a.applicationUrl ? `<a href="${esc(a.applicationUrl)}" target="_blank" rel="noopener">Envio</a> · ` : ""}${a.jobUrl ? `<a href="${esc(a.jobUrl)}" target="_blank" rel="noopener">Vaga</a>` : ""}</td>
+        <td><button type="button" data-open>${esc(a.jobTitle)}</button>${a.unavailable ? '<div class="muted">Anúncio indisponível</div>' : ""}</td><td>${esc(a.company)}</td>
+        <td data-label="Etapa"><select aria-label="Etapa para ${esc(a.jobTitle)}">${stageOptions(a.status)}</select></td>
+        <td data-label="Envio">${fmtCalendarDate(a.appliedAt)}${a.channel ? `<div class="muted">${esc(a.channel)}</div>` : ""}</td>
+        <td data-label="Próximo passo"><button type="button" data-follow-up>${a.nextAction ? esc(a.nextAction) : "Definir próximo passo"}</button></td>
+        <td data-label="Prazo">${fmtCalendarDate(a.followUpOn)}${a.followUpOn && a.followUpOn < localCalendarDate() && !["REJECTED", "CLOSED"].includes(a.status) ? ' <strong class="err-text">Vencido</strong>' : ""}</td>
+        <td data-label="Links">${a.applicationUrl ? `<a href="${esc(a.applicationUrl)}" target="_blank" rel="noopener">Envio</a> · ` : ""}${a.jobUrl ? `<a href="${esc(a.jobUrl)}" target="_blank" rel="noopener">Vaga</a>` : ""}</td>
       </tr>`).join("");
     for (const row of body.rows) {
       const application = items[Number(row.dataset.index)];
       row.querySelector("[data-open]").addEventListener("click", () => openJobDrawer({ id: application.jobId }));
+      row.querySelector("[data-follow-up]").addEventListener("click", () => openApplicationEditor("follow-up", application));
       const select = row.querySelector("select");
       select.addEventListener("change", async () => {
         select.disabled = true;
@@ -797,6 +915,90 @@ async function loadApplications(offset = 0) {
     $("#apps-retry").hidden = false;
   }
 }
+
+function localCalendarDate() {
+  const now = new Date();
+  return new Date(now.getTime() - now.getTimezoneOffset() * 60_000).toISOString().slice(0, 10);
+}
+
+function fmtCalendarDate(value) {
+  if (!value) return "—";
+  if (!value.includes("T")) return value.split("-").reverse().join("/");
+  return new Date(value).toLocaleDateString("pt-BR");
+}
+
+function showSubmittedApplications(id) {
+  const hash = "applications?" + new URLSearchParams({ submitted: "true", id });
+  if (location.hash.slice(1) === hash) showPage("applications");
+  else location.hash = hash;
+}
+
+const editor = $("#application-editor");
+const editorForm = $("#application-editor-form");
+let editorContext;
+
+function openApplicationEditor(mode, item) {
+  editorContext = { mode, item };
+  editorForm.reset();
+  const submission = mode === "submit";
+  $("#application-editor-title").textContent = submission ? "Registrar envio" : "Editar próximo passo";
+  $("#application-editor-job").textContent = [item.title || item.jobTitle, item.company].filter(Boolean).join(" · ");
+  $("#application-editor-error").textContent = "";
+  $("#application-submission-fields").hidden = !submission;
+  $("#application-submission-fields").disabled = !submission;
+  $("#application-follow-up-fields").hidden = submission;
+  $("#application-follow-up-fields").disabled = submission;
+  editorForm.elements.submittedOn.required = submission;
+  editorForm.elements.submittedOn.value = localCalendarDate();
+  editorForm.elements.submittedOn.max = localCalendarDate();
+  editorForm.elements.nextAction.value = item.nextAction || "";
+  editorForm.elements.followUpOn.value = item.followUpOn || "";
+  editor.showModal();
+}
+
+$("#application-editor-cancel").addEventListener("click", () => editor.close());
+editorForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const { mode, item } = editorContext;
+  const values = Object.fromEntries(new FormData(editorForm));
+  const submit = editorForm.querySelector('button[type="submit"]');
+  submit.disabled = true;
+  $("#application-editor-cancel").disabled = true;
+  $("#application-editor-error").textContent = "";
+  try {
+    if (mode === "submit") {
+      const result = await api("/api/jobs/" + encodeURIComponent(item.id) + "/action", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "applied", value: {
+          appliedAt: new Date(values.submittedOn + "T12:00:00").toISOString(),
+          channel: values.channel, confirmationUrl: values.confirmationUrl,
+        } }),
+      });
+      invalidate("/api/stats");
+      invalidate("/api/jobs/recent");
+      toast(result.alreadySubmitted ? "Este envio já estava registrado" : "Envio registrado", "ok");
+      if (currentJobId) closeDrawer();
+      if (currentPage() === "jobs") loadJobs({ reset: true });
+      else if (currentPage() === "dashboard") loadDashboard();
+      else if (currentPage() === "applications") loadApplications(applicationsOffset);
+    } else {
+      await api("/api/applications/" + encodeURIComponent(item.id) + "/follow-up", {
+        method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(values),
+      });
+      toast("Próximo passo salvo", "ok");
+      loadApplications(applicationsOffset);
+    }
+    editor.close();
+  } catch (error) {
+    $("#application-editor-error").textContent = error.message;
+  } finally {
+    submit.disabled = false;
+    $("#application-editor-cancel").disabled = false;
+  }
+});
+editor.addEventListener("cancel", (event) => {
+  if (editorForm.querySelector('button[type="submit"]').disabled) event.preventDefault();
+});
 
 /* ============ SETTINGS ============ */
 async function loadSettings() {

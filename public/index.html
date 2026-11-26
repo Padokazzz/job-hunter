@@ -5,40 +5,23 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Job Hunter</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💼</text></svg>" />
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" />
-  <link rel="stylesheet" href="/styles.css" />
+  <link rel="stylesheet" href="/styles.css?v=coluna-acoes" />
 </head>
 <body>
   <div class="app">
     <aside class="sidebar">
       <div class="brand">
-        <div class="logo">💼</div>
-        <div>
-          <h1>Job Hunter</h1>
-          <div class="sub">Sistema de vagas</div>
-        </div>
+        <div class="logo" aria-hidden="true">J</div>
+        <h1>Job Hunter</h1>
       </div>
-      <nav id="nav">
-        <a href="#dashboard" data-page="dashboard" class="nav-item active">
-          <span class="ico">📊</span> Dashboard <span class="badge" id="nav-dash">·</span>
-        </a>
-        <a href="#jobs" data-page="jobs" class="nav-item">
-          <span class="ico">💼</span> Vagas <span class="badge" id="nav-jobs">·</span>
-        </a>
-        <a href="#sources" data-page="sources" class="nav-item">
-          <span class="ico">🔌</span> Fontes
-        </a>
-        <a href="#reports" data-page="reports" class="nav-item">
-          <span class="ico">📈</span> Relatórios
-        </a>
-        <a href="#applications" data-page="applications" class="nav-item">
-          <span class="ico">📨</span> Candidaturas
-        </a>
-        <a href="#settings" data-page="settings" class="nav-item">
-          <span class="ico">⚙️</span> Config
-        </a>
+      <nav id="nav" aria-label="Navegação principal">
+        <a href="#dashboard" data-page="dashboard" class="nav-item active" aria-current="page"><span class="ico" aria-hidden="true">▦</span><span>Visão geral</span><span class="badge" id="nav-dash" hidden></span></a>
+        <a href="#jobs" data-page="jobs" class="nav-item"><span class="ico" aria-hidden="true">⌕</span><span>Vagas</span><span class="badge" id="nav-jobs" hidden></span></a>
+        <a href="#applications" data-page="applications" class="nav-item"><span class="ico" aria-hidden="true">▤</span><span>Candidaturas</span></a>
+        <a href="#sources" data-page="sources" class="nav-item nav-secondary"><span class="ico" aria-hidden="true">◎</span><span>Fontes</span></a>
+        <a href="#reports" data-page="reports" class="nav-item nav-secondary"><span class="ico" aria-hidden="true">▥</span><span>Relatórios</span></a>
+        <a href="#settings" data-page="settings" class="nav-item nav-secondary"><span class="ico" aria-hidden="true">⚙︎</span><span>Configuração</span></a>
+        <button class="nav-more" id="nav-more" type="button" aria-expanded="false"><span class="ico" aria-hidden="true">···</span>Mais</button>
       </nav>
       <div class="spacer"></div>
       <div class="dbmode">
@@ -49,11 +32,11 @@
 
     <div class="main">
       <header class="topbar">
-        <h2 class="page-title" id="page-title">Dashboard</h2>
+        <h2 class="page-title" id="page-title">Visão geral</h2>
         <div class="grow"></div>
         <div class="global-search">
           <span class="si">🔍</span>
-          <input type="text" id="global-search" placeholder="Buscar vaga, empresa, stack…" />
+          <input type="search" id="global-search" aria-label="Buscar vagas" placeholder="Buscar vaga, empresa, stack…" />
         </div>
         <label class="switch" title="Exibir anúncios escritos em inglês junto com os de português">
           <input type="checkbox" id="include-english" autocomplete="off" /> Incluir vagas em inglês
@@ -61,13 +44,13 @@
         <label class="switch" title="Atualizar automaticamente">
           <input type="checkbox" id="auto-refresh" /> Auto
         </label>
-        <button class="icon-btn" id="btn-refresh" title="Atualizar">
+        <button class="icon-btn" id="btn-refresh" title="Atualizar" aria-label="Atualizar">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>
         </button>
       </header>
 
       <div class="content">
-        <div id="msg" class="msg" style="display:none"></div>
+        <div id="msg" role="alert" class="msg" style="display:none"></div>
 
         <!-- DASHBOARD -->
         <section class="page active" id="page-dashboard">
@@ -77,26 +60,31 @@
             <div class="skeleton" style="height:90px"></div>
             <div class="skeleton" style="height:90px"></div>
           </div>
-          <div class="grid-2">
-            <div class="panel"><h3>Classificação</h3><div id="dash-class"></div></div>
-            <div class="panel"><h3>Status</h3><div id="dash-status"></div></div>
-            <div class="panel"><h3>Fontes</h3><div id="dash-source"></div></div>
-            <div class="panel"><h3>Empresas</h3><div id="dash-companies"></div></div>
-          </div>
-          <div class="panel">
-            <h3>Melhores Vagas</h3>
-            <div id="dash-recent"><div class="skeleton" style="height:200px"></div></div>
+          <div class="dashboard-grid">
+            <section class="panel recommendations">
+              <div class="panel-heading"><div><h3>Vagas recomendadas</h3><p>Maior aderência ao seu currículo</p></div><a class="btn-link" href="#jobs">Ver vagas</a></div>
+              <div id="dash-recent"><div class="skeleton" style="height:200px"></div></div>
+            </section>
+            <div class="dashboard-insights">
+              <section class="panel"><h3>Aderência das vagas</h3><div id="dash-class"></div></section>
+              <details class="panel insights-details">
+                <summary>Análise de vagas</summary>
+                <h3>Etapas</h3><div id="dash-status"></div>
+                <h3>Fontes</h3><div id="dash-source"></div>
+                <h3>Empresas</h3><div id="dash-companies"></div>
+              </details>
+            </div>
           </div>
         </section>
 
         <!-- JOBS -->
         <section class="page" id="page-jobs">
           <div class="filters-wrap" id="filters-wrap">
-            <div class="filters-header" id="filters-toggle">
-              <span class="filters-title">🔍 Filtros</span>
+            <button type="button" class="filters-header" id="filters-toggle" aria-expanded="false" aria-controls="filters-body">
+              <span class="filters-title">Filtros avançados</span>
               <span class="filters-count" id="filters-count"></span>
-              <span class="filters-arrow" id="filters-arrow">▼</span>
-            </div>
+              <span class="filters-arrow" id="filters-arrow" aria-hidden="true">⌄</span>
+            </button>
             <div class="filters-body" id="filters-body">
               <div class="filters-grid">
                 <div><label>Score mínimo</label><input type="number" id="f-score" min="0" placeholder="0" /></div>
@@ -130,14 +118,20 @@
             </div>
           </div>
 
-          <div class="toolbar">
+          <div class="toolbar" id="jobs-toolbar">
+            <label class="jobs-sort">Ordenar por <select id="jobs-sort" aria-label="Ordenar vagas">
+              <option value="score:desc">Maior aderência</option><option value="firstSeenAt:desc">Mais recentes</option>
+              <option value="company:asc">Empresa</option>
+            </select></label>
             <span class="result-line" id="jobs-count" role="status">—</span>
             <div class="grow"></div>
+            <label class="switch"><input type="checkbox" id="f-include-submitted" /> Incluir já candidatadas</label>
+            <label class="switch"><input type="checkbox" id="f-unavailable" /> Ver indisponíveis</label>
             <div class="chip-row" id="quick-chips">
-              <span class="chip" data-q="fav">⭐ Favoritas</span>
-              <span class="chip" data-q="new">🆕 Não vistas</span>
-              <span class="chip" data-q="applied">✅ Candidatadas</span>
-              <span class="chip" data-q="remote">🌐 Remotas</span>
+              <button type="button" class="chip" data-q="fav" aria-pressed="false">Favoritas</button>
+              <button type="button" class="chip" data-q="new" aria-pressed="false">Não vistas</button>
+              <a class="chip" href="#applications?submitted=true">Candidaturas enviadas</a>
+              <button type="button" class="chip" data-q="remote" aria-pressed="false">Remotas</button>
             </div>
           </div>
 
@@ -147,9 +141,9 @@
                 <tr>
                   <th data-sort="title">Título</th>
                   <th data-sort="company">Empresa</th>
-                  <th data-sort="score">Score</th>
-                  <th data-sort="classification">Class</th>
-                  <th data-sort="status">Status</th>
+                  <th data-sort="score">Aderência</th>
+                  <th data-sort="classification">Classificação</th>
+                  <th data-sort="status">Etapa</th>
                   <th data-sort="workModel">Modelo</th>
                   <th data-sort="seniority">Senioridade</th>
                   <th></th>
@@ -198,20 +192,27 @@
 
         <!-- APPLICATIONS -->
         <section class="page" id="page-applications">
-          <h2 class="section-title">Candidaturas</h2>
+          <div class="section-intro"><p>Acompanhe etapas e próximos prazos.</p><a class="btn-link" href="#jobs">Buscar vagas</a></div>
           <form id="apps-filters" class="panel apps-filters" aria-label="Filtros de candidaturas">
+            <input type="hidden" name="id" />
             <label>Vaga ou empresa <input name="search" type="search" maxlength="160" /></label>
             <label>Etapa <select name="stage"><option value="">Todas</option></select></label>
-            <label>Envio a partir de <input name="since" type="date" /></label>
-            <label>Envio até <input name="until" type="date" /></label>
-            <button type="submit">Filtrar</button>
-            <button type="button" id="apps-clear">Limpar</button>
+            <div class="apps-filter-actions"><button type="submit" class="primary">Filtrar</button><button type="button" id="apps-clear">Limpar</button></div>
+            <details class="apps-extra-filters">
+              <summary>Mais filtros</summary>
+              <div class="apps-extra-fields">
+                <label>Envio a partir de <input name="since" type="date" /></label>
+                <label>Envio até <input name="until" type="date" /></label>
+                <label>Envio <select name="submitted"><option value="">Todas</option><option value="true">Já enviadas</option></select></label>
+                <label>Ordenar por <select name="sort"><option value="followUp">Próximo prazo</option><option value="recent">Envio mais recente</option></select></label>
+              </div>
+            </details>
           </form>
           <p id="apps-count" role="status"></p>
           <button type="button" id="apps-retry" hidden>Tentar novamente</button>
           <div class="table-wrap">
             <table id="apps-table">
-              <thead><tr><th>Vaga</th><th>Empresa</th><th>Status</th><th>Enviada em</th><th>Link</th></tr></thead>
+              <thead><tr><th>Vaga</th><th>Empresa</th><th>Status</th><th>Enviada em</th><th>Próximo passo</th><th>Prazo</th><th>Links</th></tr></thead>
               <tbody id="apps-body"></tbody>
             </table>
             <div class="empty" id="apps-empty" style="display:none">Nenhuma candidatura.</div>
@@ -233,7 +234,7 @@
 
   <!-- DRAWER -->
   <div class="drawer-overlay" id="drawer">
-    <aside class="drawer">
+    <aside class="drawer" role="dialog" aria-modal="true" aria-labelledby="m-title">
       <div class="drawer-header">
         <button class="x-close" id="drawer-close">✕</button>
         <h2 id="m-title"></h2>
@@ -245,7 +246,9 @@
           <button id="m-fav">⭐ Favoritar</button>
           <button id="m-view">👁 Marcar vista</button>
           <button id="m-approve">✅ Aprovar</button>
+          <button type="button" id="m-unavailable">Marcar inválida</button>
           <button id="m-ignore">❌ Ignorar</button>
+          <button class="primary" id="m-applied">Já me candidatei</button>
           <button class="primary" id="m-prepare">📋 Preparar</button>
         </div>
         <section>
@@ -272,16 +275,34 @@
         <section id="m-application" style="display:none">
           <h4>Candidatura</h4>
           <div id="m-app-content"></div>
-          <div class="drawer-actions" style="margin-top:8px">
-            <button class="primary" id="m-applied">✅ Candidatado</button>
-          </div>
         </section>
       </div>
     </aside>
   </div>
 
-  <div class="toasts" id="toasts"></div>
+  <dialog class="workflow-dialog" id="application-editor" aria-labelledby="application-editor-title">
+    <form id="application-editor-form">
+      <h2 id="application-editor-title"></h2>
+      <p id="application-editor-job" class="muted"></p>
+      <fieldset id="application-submission-fields">
+        <label>Data do envio <input type="date" name="submittedOn" /></label>
+        <label>Canal <input name="channel" maxlength="80" placeholder="Ex.: LinkedIn ou site da empresa" /></label>
+        <label>Link de confirmação <input type="url" name="confirmationUrl" maxlength="2048" /></label>
+      </fieldset>
+      <fieldset id="application-follow-up-fields">
+        <label>Próximo passo <input name="nextAction" maxlength="200" placeholder="Ex.: Perguntar sobre o andamento" /></label>
+        <label>Prazo <input type="date" name="followUpOn" /></label>
+      </fieldset>
+      <p id="application-editor-error" role="alert"></p>
+      <div class="drawer-actions">
+        <button class="primary" type="submit">Salvar</button>
+        <button type="button" id="application-editor-cancel">Cancelar</button>
+      </div>
+    </form>
+  </dialog>
 
-  <script type="module" src="/app.js?v=idioma-vagas"></script>
+  <div class="toasts" id="toasts" role="status" aria-live="polite"></div>
+
+  <script type="module" src="/app.js?v=coluna-acoes"></script>
 </body>
 </html>
