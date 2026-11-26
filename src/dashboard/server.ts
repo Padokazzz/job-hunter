@@ -53,6 +53,7 @@ function invalidate(prefix: string) {
 }
 
 function toJobDto(job: Job & { breakdown: ScoreBreakdown[]; applications: Application[] }) {
+  const submitted = job.applications?.find((application) => application.appliedAt);
   return {
     id: job.id,
     sourceId: job.sourceId,
@@ -63,6 +64,8 @@ function toJobDto(job: Job & { breakdown: ScoreBreakdown[]; applications: Applic
     seniority: job.seniority,
     english: job.english,
     postingLanguage: job.postingLanguage,
+    submittedAt: submitted?.appliedAt ?? null,
+    submittedApplicationId: submitted?.id ?? null,
     technologies: job.technologies ? job.technologies.split(", ").filter(Boolean) : [],
     salaryMin: job.salaryMin,
     salaryMax: job.salaryMax,
@@ -72,6 +75,7 @@ function toJobDto(job: Job & { breakdown: ScoreBreakdown[]; applications: Applic
     status: job.status,
     favorited: job.favorited,
     viewed: job.viewed,
+    unavailable: job.unavailable,
     firstSeenAt: job.firstSeenAt,
     publishedAt: job.publishedAt,
     url: job.url,
@@ -98,23 +102,22 @@ function allowedPostingLanguages(query: unknown): string[] {
 
 app.get("/api/stats", async (req) => {
   const languages = allowedPostingLanguages(req.query);
-  const where = { postingLanguage: { in: languages } };
+  const where = { postingLanguage: { in: languages }, unavailable: false };
   const cacheKey = "stats:" + languages.join(",");
   return cached(cacheKey, 120_000, async () => {
-    const total = await prisma.job.count({ where });
-    const byClassificationAgg = await prisma.job.groupBy({ where, by: ["classification"], _count: { _all: true } });
-    const bySourceAgg = await prisma.job.groupBy({ where, by: ["sourceId"], _count: { _all: true } });
-    const byStatusAgg = await prisma.job.groupBy({ where, by: ["status"], _count: { _all: true } });
-    const favorited = await prisma.job.count({ where: { ...where, favorited: true } });
-    const applied = await prisma.application.count();
-
-    const topCompanies = await prisma.job.groupBy({
-      where,
-      by: ["company"],
-      _count: { _all: true },
-      orderBy: { _count: { company: "desc" } },
-      take: 5,
-    });
+    const [total, byClassificationAgg, bySourceAgg, byStatusAgg, favorited, applied, topCompanies] =
+      await Promise.all([
+        prisma.job.count({ where }),
+        prisma.job.groupBy({ where, by: ["classification"], _count: { _all: true } }),
+        prisma.job.groupBy({ where, by: ["sourceId"], _count: { _all: true } }),
+        prisma.job.groupBy({ where, by: ["status"], _count: { _all: true } }),
+        prisma.job.count({ where: { ...where, favorited: true } }),
+        prisma.application.count(),
+        prisma.job.groupBy({
+          where, by: ["company"], _count: { _all: true },
+          orderBy: { _count: { company: "desc" } }, take: 5,
+        }),
+      ]);
 
     return {
       total,
@@ -136,9 +139,12 @@ const SORTABLE: Record<string, string> = {
   publishedAt: "publishedAt",
 };
 
+const submittedApplications = { some: { appliedAt: { not: null } } } satisfies Prisma.ApplicationListRelationFilter;
+
 app.get("/api/jobs", async (req, reply) => {
   const q = (req.query as Record<string, string>) ?? {};
-  const conditions: Prisma.JobWhereInput[] = [];
+  const unavailable = q.availability === "unavailable";
+  const conditions: Prisma.JobWhereInput[] = [{ unavailable }];
 
   if (q.scoreMin && Number.isInteger(Number(q.scoreMin))) conditions.push({ score: { gte: Number(q.scoreMin) } });
 
@@ -148,6 +154,10 @@ app.get("/api/jobs", async (req, reply) => {
   if (q.english) conditions.push({ english: q.english });
   if (q.source) conditions.push({ sourceId: q.source });
   if (q.status) conditions.push({ status: q.status });
+  if (q.application === "submitted") conditions.push({ applications: submittedApplications });
+  else if (!unavailable && q.application !== "all" && !["APPLIED", "INTERVIEW", "OFFER"].includes(q.status ?? "")) {
+    conditions.push({ NOT: { applications: submittedApplications } });
+  }
   if (q.favorited === "true") conditions.push({ favorited: true });
   if (q.viewed === "false") conditions.push({ viewed: false });
   for (const term of searchTerms(q.search)) {
@@ -190,7 +200,8 @@ app.get("/api/jobs", async (req, reply) => {
         select: {
           id: true, sourceId: true, company: true, title: true, location: true,
           workModel: true, seniority: true, english: true, score: true,
-          classification: true, status: true, favorited: true, viewed: true, postingLanguage: true,
+          classification: true, status: true, favorited: true, viewed: true, postingLanguage: true, unavailable: true,
+          applications: { where: { appliedAt: { not: null } }, orderBy: [{ appliedAt: "asc" }, { id: "asc" }], take: 1, select: { id: true, appliedAt: true } },
         firstSeenAt: true, publishedAt: true, url: true, technologies: true,
       },
       }),
@@ -210,6 +221,8 @@ app.get("/api/jobs/recent", async (req) => {
   return cached("jobs:recent:" + languages.join(","), 30_000, async () => {
     const jobs = await prisma.job.findMany({
       where: {
+        NOT: { applications: submittedApplications },
+        unavailable: false,
         postingLanguage: { in: languages },
         score: { gte: 40 },
         classification: { in: ["PRIORITARY", "GOOD", "SECONDARY"] },
@@ -258,7 +271,7 @@ app.get("/api/jobs/:id", async (req, reply) => {
   const { id } = req.params as { id: string };
   const job = await prisma.job.findUnique({
     where: { id },
-    include: { breakdown: true, applications: true },
+    include: { breakdown: true, applications: { orderBy: [{ appliedAt: { sort: "asc", nulls: "last" } }, { id: "asc" }] } },
   });
   if (!job) return reply.code(404).send({ error: "not found" });
   return toJobDto(job as Job & { breakdown: ScoreBreakdown[]; applications: Application[] });
@@ -266,7 +279,7 @@ app.get("/api/jobs/:id", async (req, reply) => {
 
 app.post("/api/jobs/:id/action", async (req, reply) => {
   const { id } = req.params as { id: string };
-  const { action, value } = (req.body ?? {}) as { action: string; value?: boolean | string };
+  const { action, value } = (req.body ?? {}) as { action: string; value?: boolean | string | { appliedAt?: string; channel?: string; confirmationUrl?: string } };
 
   // Preparar candidatura: gera o pacote (carta/mensagem/respostas) a partir do
   // curriculo REAL e grava em Application. NAO envia — envio e humano.
@@ -331,19 +344,52 @@ app.post("/api/jobs/:id/action", async (req, reply) => {
   // Confirmacao HUMANA de envio. O bot nunca envia automaticamente nem
   // contorna CAPTCHA/2FA/anti-bot (doc sec. 16).
   if (action === "applied") {
-    const jobRow = await prisma.job.findUnique({ where: { id } });
-    if (!jobRow) return reply.code(404).send({ error: "not found" });
-    const url = typeof value === "string" && value ? value : jobRow.url;
+    const details = value && typeof value === "object" ? value : undefined;
+    if (details && [details.appliedAt, details.channel, details.confirmationUrl].some(
+      (field) => field !== undefined && typeof field !== "string")) {
+      return reply.code(400).send({ error: "Confira a data, o canal e o link de confirmação." });
+    }
+    const appliedAt = details?.appliedAt ? new Date(details.appliedAt) : new Date();
+    const channel = details?.channel?.trim() || null;
+    const applicationUrl = details?.confirmationUrl?.trim() || (typeof value === "string" ? value : "") || null;
+    if (Number.isNaN(appliedAt.getTime()) || appliedAt.getTime() > Date.now() + 24 * 60 * 60 * 1000 || (channel?.length ?? 0) > 80 ||
+        (applicationUrl && !validWebUrl(applicationUrl))) {
+      return reply.code(400).send({ error: "Confira a data, o canal e o link de confirmação." });
+    }
 
-    await prisma.$transaction(async (tx) => {
-      await tx.job.update({ where: { id }, data: { status: "APPLIED" } });
-      const existing = await tx.application.findFirst({ where: { jobId: id }, orderBy: { createdAt: "desc" } });
-      const data = { status: "APPLIED", appliedAt: existing?.appliedAt ?? new Date(), applicationUrl: url };
-      if (existing) await tx.application.update({ where: { id: existing.id }, data });
-      else await tx.application.create({ data: { ...data, jobId: id } });
+    const result = await prisma.$transaction(async (tx) => {
+      // Lock the job before reading applications so concurrent confirmations share the same record.
+      const locked = await tx.$queryRaw<Array<{ id: string; status: string }>>`
+        SELECT id, status FROM "Job" WHERE id = ${id} FOR UPDATE
+      `;
+      const job = locked[0];
+      if (!job) return null;
+      const submitted = await tx.application.findFirst({
+        where: { jobId: id, appliedAt: { not: null } }, orderBy: [{ appliedAt: "asc" }, { id: "asc" }],
+      });
+      if (submitted) return { applicationId: submitted.id, status: job.status, alreadySubmitted: true };
+
+      const draft = await tx.application.findFirst({ where: { jobId: id }, orderBy: [{ createdAt: "desc" }, { id: "desc" }] });
+      const status = draft && applicationStages.includes(job.status) && job.status !== "APPLICATION_READY"
+        ? job.status : "APPLIED";
+      const data = { status, appliedAt, channel, applicationUrl: applicationUrl ?? draft?.applicationUrl };
+      const application = draft
+        ? await tx.application.update({ where: { id: draft.id }, data })
+        : await tx.application.create({ data: { ...data, jobId: id } });
+      await tx.job.update({ where: { id }, data: { status } });
+      return { applicationId: application.id, status, alreadySubmitted: false };
     });
+    if (!result) return reply.code(404).send({ error: "Vaga não encontrada." });
     invalidate("jobs:"); invalidate("stats");
-    return { ok: true, status: "APPLIED" };
+    return { ok: true, ...result };
+  }
+
+  if (action === "unavailable") {
+    if (typeof value !== "boolean") return reply.code(400).send({ error: "Disponibilidade inválida." });
+    const changed = await prisma.job.updateMany({ where: { id }, data: { unavailable: value } });
+    if (!changed.count) return reply.code(404).send({ error: "Vaga não encontrada." });
+    invalidate("jobs:"); invalidate("stats");
+    return { ok: true, unavailable: value };
   }
 
   const update: Record<string, unknown> = {};
@@ -419,6 +465,15 @@ function searchTerms(value: unknown): string[] {
   return typeof value === "string" ? value.trim().slice(0, 160).split(/\s+/).filter(Boolean).slice(0, 8) : [];
 }
 
+function validWebUrl(value: string): boolean {
+  if (value.length > 2048) return false;
+  try {
+    return ["http:", "https:"].includes(new URL(value).protocol);
+  } catch {
+    return false;
+  }
+}
+
 function dayStart(value: unknown): Date | undefined {
   if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return;
   const date = new Date(value + "T00:00:00.000Z");
@@ -441,6 +496,7 @@ app.get("/api/applications", async (req, reply) => {
   }
 
   const where: Prisma.ApplicationWhereInput = {
+    id: typeof q.id === "string" && q.id ? q.id : undefined,
     job: {
       status: q.stage && applicationStages.includes(q.stage) ? q.stage : undefined,
       AND: searchTerms(q.search).map((term) => ({
@@ -450,7 +506,7 @@ app.get("/api/applications", async (req, reply) => {
         ],
       })),
     },
-    appliedAt: since || until ? { gte: since, lt: until } : undefined,
+    appliedAt: q.submitted === "true" ? { not: null, gte: since, lt: until } : since || until ? { gte: since, lt: until } : undefined,
   };
   const limit = 25;
   const offset = Math.min(1_000_000, Math.max(0, Math.trunc(Number(q.offset) || 0)));
@@ -458,21 +514,38 @@ app.get("/api/applications", async (req, reply) => {
     prisma.application.count({ where }),
     prisma.application.findMany({
       where,
-      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      orderBy: q.sort === "followUp"
+        ? [{ followUpOn: { sort: "asc", nulls: "last" } }, { id: "desc" }]
+        : [{ appliedAt: { sort: "desc", nulls: "last" } }, { createdAt: "desc" }, { id: "desc" }],
       skip: offset,
       take: limit,
       select: {
-        id: true, jobId: true, appliedAt: true, applicationUrl: true,
-        job: { select: { title: true, company: true, url: true, status: true } },
+        id: true, jobId: true, appliedAt: true, applicationUrl: true, channel: true, nextAction: true, followUpOn: true,
+        job: { select: { title: true, company: true, url: true, status: true, unavailable: true } },
       },
     }),
   ]);
   return {
     total, offset, limit,
     items: apps.map(({ job, ...application }) => ({
-      ...application, jobTitle: job.title, company: job.company, jobUrl: job.url, status: job.status,
+      ...application, jobTitle: job.title, company: job.company, jobUrl: job.url, status: job.status, unavailable: job.unavailable,
     })),
   };
+});
+
+app.patch("/api/applications/:id/follow-up", async (req, reply) => {
+  const { id } = req.params as { id: string };
+  const { nextAction, followUpOn } = (req.body ?? {}) as { nextAction?: unknown; followUpOn?: unknown };
+  if (typeof nextAction !== "string" || nextAction.trim().length > 200 ||
+      typeof followUpOn !== "string" || (followUpOn && !dayStart(followUpOn))) {
+    return reply.code(400).send({ error: "Informe uma ação de até 200 caracteres e uma data válida." });
+  }
+  const result = await prisma.application.updateMany({
+    where: { id },
+    data: { nextAction: nextAction.trim() || null, followUpOn: followUpOn || null },
+  });
+  if (!result.count) return reply.code(404).send({ error: "Candidatura não encontrada." });
+  return { ok: true };
 });
 
 app.patch("/api/applications/:id/stage", async (req, reply) => {

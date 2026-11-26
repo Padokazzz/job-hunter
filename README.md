@@ -6,6 +6,16 @@ O sistema reúne vagas de diferentes fontes, normaliza os dados, remove duplicid
 
 **Princípio do projeto:** automatizar a pesquisa e a organização, sem retirar do candidato a decisão sobre onde e quando se candidatar. O sistema não envia candidaturas automaticamente.
 
+## Interface
+
+As capturas usam vagas e candidaturas fictícias.
+
+![Visão geral no desktop com indicadores e vagas recomendadas por aderência](docs/images/visao-geral.png)
+
+![Acompanhamento de candidaturas com etapa, próximo passo e prazo](docs/images/candidaturas.png)
+
+<img src="docs/images/vagas-mobile.png" alt="Lista de vagas no celular com filtros, ações e navegação inferior" width="390" />
+
 ## Funcionalidades
 
 - **Coleta multifonte:** integração com sete fontes, usando APIs, parsers e adaptadores específicos.
@@ -91,23 +101,24 @@ As categorias e pesos são regras de triagem definidas no projeto, não uma aval
 
 ## Dashboard
 
-A interface permite:
-
-- Consultar vagas em português. A opção **Incluir vagas em inglês** no cabeçalho libera o inglês e lembra a escolha neste navegador. O painel oculta anúncios cujo idioma não consegue identificar.
-- Ordenar vagas por pontuação e outros atributos.
-- Favoritar e atualizar o status de vagas.
-- Em **Candidaturas**, buscar por vaga ou empresa, filtrar por etapa e data de envio e atualizar o acompanhamento direto na tabela.
-- Visualizar detalhes, motivos de compatibilidade e pontos de atenção.
-- Acompanhar fontes e execuções de coleta.
-- Consultar relatórios.
-- Enviar um currículo em PDF para extração de informações, conforme os limites implementados.
-- Preparar materiais de candidatura para revisão.
+- **Visão geral.** Veja indicadores e abra as vagas recomendadas pela aderência ao currículo.
+- **Vagas.** Busque por cargo, empresa ou tecnologia, ordene por aderência ou data de descoberta e use os filtros avançados quando precisar. Por padrão, a descoberta mostra anúncios em português. **Incluir vagas em inglês** habilita o inglês neste navegador. **Inglês exigido** filtra o requisito da vaga. Anúncios cujo idioma não pôde ser identificado ficam de fora.
+- **Registro de envio.** Clique em **Já me candidatei** na lista ou nos detalhes e informe a data, o canal e, se tiver, o link de confirmação. Ao salvar pela lista, você continua em **Vagas** com os filtros atuais. A vaga sai da descoberta por padrão e fica em **Candidaturas**. Use **Incluir já candidatadas** para vê-la também na lista.
+- **Anúncios indisponíveis.** Use **Marcar inválida** se o anúncio foi removido ou o link deixou de funcionar. A vaga sai da lista e das recomendações. Em **Ver indisponíveis**, use **Restaurar vaga** para desfazer. Candidaturas registradas mantêm sua etapa de acompanhamento.
+- **Candidaturas.** Filtre por vaga, empresa, etapa ou data de envio. Atualize a etapa e registre o próximo passo e seu prazo na tabela. A ordenação padrão prioriza os prazos mais próximos.
+- **Celular.** A navegação principal fica na barra inferior, e as listas de vagas e candidaturas aparecem em cartões com suas ações.
 
 ### Ranking por currículo
 
 O ranking usa o PDF ativo em **Configuração**. Sem currículo ativo no banco, o coletor lê o único PDF em `curriculo/`, uma pasta ignorada pelo Git e montada em modo somente leitura no coletor Docker. A correspondência entre as tecnologias detectadas vale até 70 dos 100 pontos.
 
-Para recalcular as vagas já salvas sem consultar fontes externas, execute `npm run run -- --rerank` com a conexão do projeto configurada.
+Para recalcular as vagas já salvas no Docker, com o coletor em execução:
+
+```bash
+docker compose exec scheduler npm run run -- --rerank
+```
+
+Fora do Docker, execute `npm run run -- --rerank` com a conexão do projeto configurada. O recálculo usa as vagas armazenadas no banco.
 
 ## Candidaturas e controle humano
 
@@ -118,6 +129,7 @@ O fluxo padrão é manual:
 3. O usuário escolhe quais materiais deseja preparar.
 4. O sistema gera rascunhos e respostas de apoio.
 5. O usuário revisa, ajusta e realiza o envio fora do sistema.
+6. O usuário registra o envio e acompanha a etapa, o próximo passo e seu prazo no painel.
 
 A opção `AUTO_PREPARE`, quando habilitada, pode preparar materiais para vagas que atendam aos critérios configurados. Ela não autoriza o envio automático de candidaturas.
 
@@ -140,17 +152,13 @@ cp .env.example .env
 
 Edite o arquivo `.env` com suas configurações. Defina uma senha forte para o PostgreSQL e informe os dados de candidato exigidos pelo fluxo de preparação de candidaturas.
 
-Inicie os serviços:
+Inicie o painel, o PostgreSQL e o coletor:
 
 ```bash
-docker compose up -d
+docker compose up --build -d
 ```
 
-O dashboard fica disponível em:
-
-```text
-http://localhost:3000
-```
+O [painel local](http://localhost:3000) fica disponível na porta 3000 por padrão. A API usa a mesma porta, em rotas como [estatísticas](http://localhost:3000/api/stats).
 
 Para acompanhar os logs:
 
@@ -182,7 +190,7 @@ As principais variáveis documentadas no projeto incluem:
 | `POSTGRES_PASSWORD` | Senha do PostgreSQL. |
 | `DASHBOARD_PORT` | Porta publicada pelo dashboard. |
 | `BRIGHTDATA_API_TOKEN` | Credencial opcional para a integração com Indeed. |
-| `OPENAI_API_KEY` | Credencial opcional para recursos de análise com IA. |
+| `OPENAI_API_KEY` | Variável reservada. O ranking atual é determinístico. |
 | `AUTO_PREPARE` | Habilita a preparação automática segundo as regras configuradas. |
 | `DATABASE_URL` | String de conexão com o banco. |
 | `JOBHUNTER_DB_CONFIRMED` | Confirmação exigida pela configuração de banco do projeto. |
@@ -215,7 +223,7 @@ npm test
 A suíte existente cobre áreas como:
 
 - Pontuação e classificação.
-- Normalização de atributos de vagas.
+- Normalização de atributos e detecção do idioma dos anúncios.
 - Filtros.
 - Deduplicação.
 - Adaptadores e parsers de fontes.
@@ -239,6 +247,7 @@ bot/
 ├── public/
 ├── prisma/
 ├── scripts/
+├── docs/images/
 └── tests/
 ```
 
